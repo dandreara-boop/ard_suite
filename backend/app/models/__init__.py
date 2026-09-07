@@ -1,1 +1,43 @@
+from backend.app.models.catalogo import (
+    Articulo,
+    ArticuloAtributo,
+    ArticuloProveedor,
+    Atributo,
+    Categoria,
+    FamiliaAtributo,
+    FamiliaAtributos,
+    Marca,
+    Proveedor,
+    ValorAtributo,
+    Variante,
+    VarianteValorAtributo,
+)
+from backend.app.models.inventory import (
+    DestinoInventario,
+    DestinoInventarioTipo,
+    MovimientoStock,
+    MovimientoStockTipo,
+    StockActual,
+    StockEstado,
+)
 
+__all__ = [
+    "Articulo",
+    "ArticuloAtributo",
+    "ArticuloProveedor",
+    "Atributo",
+    "Categoria",
+    "FamiliaAtributo",
+    "FamiliaAtributos",
+    "Marca",
+    "Proveedor",
+    "ValorAtributo",
+    "Variante",
+    "VarianteValorAtributo",
+    "DestinoInventario",
+    "DestinoInventarioTipo",
+    "MovimientoStock",
+    "MovimientoStockTipo",
+    "StockActual",
+    "StockEstado",
+]
