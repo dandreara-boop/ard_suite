@@ -7,6 +7,7 @@ from backend.app.services.inventory_service import InventoryService
 from backend.app.services.marca_service import MarcaService
 from backend.app.services.proveedor_service import ProveedorService
 from backend.app.services.variante_service import VarianteService
+from backend.app.services.venta_service import VentaService
 
 __all__ = [
     "ArticuloService",
@@ -18,4 +19,5 @@ __all__ = [
     "MarcaService",
     "ProveedorService",
     "VarianteService",
+    "VentaService",
 ]

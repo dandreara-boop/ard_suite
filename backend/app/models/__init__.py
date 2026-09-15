@@ -20,6 +20,14 @@ from backend.app.models.inventory import (
     StockActual,
     StockEstado,
 )
+from backend.app.models.venta import (
+    DetalleVenta,
+    EventoPendiente,
+    EventoPendienteEstado,
+    PagoVenta,
+    Venta,
+    VentaEstado,
+)
 
 __all__ = [
     "Articulo",
@@ -40,4 +48,10 @@ __all__ = [
     "MovimientoStockTipo",
     "StockActual",
     "StockEstado",
+    "DetalleVenta",
+    "EventoPendiente",
+    "EventoPendienteEstado",
+    "PagoVenta",
+    "Venta",
+    "VentaEstado",
 ]

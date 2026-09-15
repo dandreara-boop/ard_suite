@@ -49,6 +49,17 @@ from backend.app.schemas.inventory import (
     StockActualRead,
     StockRebuildResult,
 )
+from backend.app.schemas.venta import (
+    DetalleVentaCreate,
+    DetalleVentaRead,
+    EventoPendienteRead,
+    PagoVentaCreate,
+    PagoVentaRead,
+    ProcesarEventosRequest,
+    ProcesarEventosResult,
+    VentaCreate,
+    VentaRead,
+)
 
 __all__ = [
     "AjusteStockCreate",
@@ -67,6 +78,9 @@ __all__ = [
     "CategoriaUpdate",
     "DestinoInventarioCreate",
     "DestinoInventarioRead",
+    "DetalleVentaCreate",
+    "DetalleVentaRead",
+    "EventoPendienteRead",
     "FamiliaAtributoCreate",
     "FamiliaAtributoRead",
     "FamiliaAtributosCreate",
@@ -82,6 +96,10 @@ __all__ = [
     "ProveedorCreate",
     "ProveedorRead",
     "ProveedorUpdate",
+    "PagoVentaCreate",
+    "PagoVentaRead",
+    "ProcesarEventosRequest",
+    "ProcesarEventosResult",
     "StockActualRead",
     "StockRebuildResult",
     "ValorAtributoCreate",
@@ -98,4 +116,6 @@ __all__ = [
     "VarianteRead",
     "VarianteUpdate",
     "VarianteValorAtributoRead",
+    "VentaCreate",
+    "VentaRead",
 ]

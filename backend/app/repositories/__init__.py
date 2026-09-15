@@ -10,16 +10,26 @@ from backend.app.repositories.inventory_repository import (
 from backend.app.repositories.marca_repository import MarcaRepository
 from backend.app.repositories.proveedor_repository import ProveedorRepository
 from backend.app.repositories.variante_repository import VarianteRepository
+from backend.app.repositories.venta_repository import (
+    DetalleVentaRepository,
+    EventoPendienteRepository,
+    PagoVentaRepository,
+    VentaRepository,
+)
 
 __all__ = [
     "ArticuloRepository",
     "AtributoRepository",
     "CategoriaRepository",
+    "DetalleVentaRepository",
+    "EventoPendienteRepository",
     "FamiliaAtributosRepository",
     "DestinoInventarioRepository",
     "MarcaRepository",
     "MovimientoStockRepository",
+    "PagoVentaRepository",
     "ProveedorRepository",
     "StockActualRepository",
     "VarianteRepository",
+    "VentaRepository",
 ]
