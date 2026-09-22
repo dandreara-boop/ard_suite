@@ -10,6 +10,7 @@ from backend.app.api.familias_atributos import router as familias_atributos_rout
 from backend.app.api.health import router as health_router
 from backend.app.api.inventario import router as inventario_router
 from backend.app.api.marcas import router as marcas_router
+from backend.app.api.precios import router as precios_router
 from backend.app.api.proveedores import router as proveedores_router
 from backend.app.api.variantes import router as variantes_router
 from backend.app.api.ventas import router as ventas_router
@@ -38,6 +39,7 @@ app.include_router(variantes_router)
 app.include_router(proveedores_router)
 app.include_router(inventario_router)
 app.include_router(ventas_router)
+app.include_router(precios_router)
 
 
 @app.get("/")

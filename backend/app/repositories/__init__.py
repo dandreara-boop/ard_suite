@@ -8,6 +8,11 @@ from backend.app.repositories.inventory_repository import (
     StockActualRepository,
 )
 from backend.app.repositories.marca_repository import MarcaRepository
+from backend.app.repositories.pricing_repository import (
+    AuditoriaPrecioArticuloRepository,
+    CondicionComercialPrecioRepository,
+    PrecioArticuloRepository,
+)
 from backend.app.repositories.proveedor_repository import ProveedorRepository
 from backend.app.repositories.variante_repository import VarianteRepository
 from backend.app.repositories.venta_repository import (
@@ -19,8 +24,10 @@ from backend.app.repositories.venta_repository import (
 
 __all__ = [
     "ArticuloRepository",
+    "AuditoriaPrecioArticuloRepository",
     "AtributoRepository",
     "CategoriaRepository",
+    "CondicionComercialPrecioRepository",
     "DetalleVentaRepository",
     "EventoPendienteRepository",
     "FamiliaAtributosRepository",
@@ -28,6 +35,7 @@ __all__ = [
     "MarcaRepository",
     "MovimientoStockRepository",
     "PagoVentaRepository",
+    "PrecioArticuloRepository",
     "ProveedorRepository",
     "StockActualRepository",
     "VarianteRepository",
