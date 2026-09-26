@@ -1,6 +1,7 @@
 from backend.app.repositories.articulo_repository import ArticuloRepository
 from backend.app.repositories.atributo_repository import AtributoRepository
 from backend.app.repositories.categoria_repository import CategoriaRepository
+from backend.app.repositories.commercial_repository import MedioPagoRepository, ResolucionComercialVentaRepository
 from backend.app.repositories.familia_atributos_repository import FamiliaAtributosRepository
 from backend.app.repositories.inventory_repository import (
     DestinoInventarioRepository,
@@ -33,10 +34,12 @@ __all__ = [
     "FamiliaAtributosRepository",
     "DestinoInventarioRepository",
     "MarcaRepository",
+    "MedioPagoRepository",
     "MovimientoStockRepository",
     "PagoVentaRepository",
     "PrecioArticuloRepository",
     "ProveedorRepository",
+    "ResolucionComercialVentaRepository",
     "StockActualRepository",
     "VarianteRepository",
     "VentaRepository",

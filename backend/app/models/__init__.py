@@ -12,6 +12,7 @@ from backend.app.models.catalogo import (
     Variante,
     VarianteValorAtributo,
 )
+from backend.app.models.commercial import MedioPago, ResolucionComercialVenta
 from backend.app.models.inventory import (
     DestinoInventario,
     DestinoInventarioTipo,
@@ -51,10 +52,12 @@ __all__ = [
     "FamiliaAtributo",
     "FamiliaAtributos",
     "Marca",
+    "MedioPago",
     "MotivoAuditoriaPrecio",
     "OrigenPrecioArticulo",
     "PrecioArticulo",
     "Proveedor",
+    "ResolucionComercialVenta",
     "ValorAtributo",
     "Variante",
     "VarianteValorAtributo",

@@ -1,4 +1,5 @@
 from backend.app.services.codigo_barra_service import CodigoBarraService
+from backend.app.services.commercial_service import CommercialService
 from backend.app.services.articulo_service import ArticuloService
 from backend.app.services.atributo_service import AtributoService
 from backend.app.services.categoria_service import CategoriaService
@@ -15,6 +16,7 @@ __all__ = [
     "AtributoService",
     "CodigoBarraService",
     "CategoriaService",
+    "CommercialService",
     "FamiliaAtributosService",
     "InventoryService",
     "MarcaService",

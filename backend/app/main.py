@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from backend.app.api.articulos import router as articulos_router
 from backend.app.api.atributos import router as atributos_router
 from backend.app.api.categorias import router as categorias_router
+from backend.app.api.comercial import medios_router, ventas_comercial_router
 from backend.app.api.familias_atributos import router as familias_atributos_router
 from backend.app.api.health import router as health_router
 from backend.app.api.inventario import router as inventario_router
@@ -40,6 +41,8 @@ app.include_router(proveedores_router)
 app.include_router(inventario_router)
 app.include_router(ventas_router)
 app.include_router(precios_router)
+app.include_router(medios_router)
+app.include_router(ventas_comercial_router)
 
 
 @app.get("/")

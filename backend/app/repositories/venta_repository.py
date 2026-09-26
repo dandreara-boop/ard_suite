@@ -15,7 +15,7 @@ class VentaRepository(BaseRepository[Venta]):
         statement = (
             select(Venta)
             .where(Venta.id == venta_id)
-            .options(selectinload(Venta.detalles), selectinload(Venta.pagos))
+            .options(selectinload(Venta.detalles).selectinload(DetalleVenta.variante), selectinload(Venta.pagos))
         )
         if for_update:
             statement = statement.with_for_update()
@@ -24,7 +24,7 @@ class VentaRepository(BaseRepository[Venta]):
     def list_full(self, skip: int = 0, limit: int = 100) -> list[Venta]:
         statement: Select[tuple[Venta]] = (
             select(Venta)
-            .options(selectinload(Venta.detalles), selectinload(Venta.pagos))
+            .options(selectinload(Venta.detalles).selectinload(DetalleVenta.variante), selectinload(Venta.pagos))
             .order_by(Venta.id)
             .offset(skip)
             .limit(limit)
