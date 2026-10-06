@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from backend.app.models import EventoPendienteEstado, VentaEstado
+from backend.app.models import EventoPendienteEstado, VentaEstado, VentaTipoAtencion
 
 
 class ORMModel(BaseModel):
@@ -16,6 +16,10 @@ class ORMModel(BaseModel):
 class VentaCreate(BaseModel):
     destino_id: int
     usuario_id: int | None = None
+    numero_corto: int | None = None
+    referencia_cliente: str | None = None
+    vendedor_id: int | None = None
+    tipo_atencion: VentaTipoAtencion = VentaTipoAtencion.ATENDIDA
 
 
 class DetalleVentaCreate(BaseModel):
@@ -54,11 +58,18 @@ class VentaRead(ORMModel):
     id: int
     global_id: str
     numero_venta: str
+    numero_corto: int | None
+    referencia_cliente: str | None
     destino_id: int
     estado: VentaEstado
     subtotal: Decimal
     total: Decimal
     usuario_id: int | None
+    vendedor_id: int | None
+    tipo_atencion: VentaTipoAtencion
+    caja_captura_id: int | None
+    sesion_caja_id: int | None
+    capturada_at: datetime | None
     created_at: datetime
     updated_at: datetime
     cerrada_at: datetime | None

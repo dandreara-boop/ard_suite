@@ -16,9 +16,16 @@ from backend.app.models.catalogo import TimestampMixin
 class VentaEstado(str, Enum):
     ABIERTA = "ABIERTA"
     SUSPENDIDA = "SUSPENDIDA"
+    LISTA_PARA_COBRAR = "LISTA_PARA_COBRAR"
     EN_PAGO = "EN_PAGO"
+    EN_COBRO = "EN_COBRO"
     CERRADA = "CERRADA"
     ANULADA = "ANULADA"
+
+
+class VentaTipoAtencion(str, Enum):
+    ATENDIDA = "ATENDIDA"
+    AUTOSERVICIO = "AUTOSERVICIO"
 
 
 class EventoPendienteEstado(str, Enum):
@@ -36,6 +43,9 @@ class Venta(TimestampMixin, Base):
         String(36), nullable=False, unique=True, index=True, default=lambda: str(uuid4())
     )
     numero_venta: Mapped[str] = mapped_column(String(40), nullable=False, unique=True, index=True)
+    # Operative short number; assignment policy remains pending for Sprint 9.2.
+    numero_corto: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    referencia_cliente: Mapped[str | None] = mapped_column(String(120), nullable=True)
     destino_id: Mapped[int] = mapped_column(ForeignKey("destinos_inventario.id"), nullable=False, index=True)
     estado: Mapped[VentaEstado] = mapped_column(
         SAEnum(VentaEstado, native_enum=False, length=20),
@@ -47,9 +57,22 @@ class Venta(TimestampMixin, Base):
     subtotal: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=Decimal("0.00"))
     total: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=Decimal("0.00"))
     usuario_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    vendedor_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    tipo_atencion: Mapped[VentaTipoAtencion] = mapped_column(
+        SAEnum(VentaTipoAtencion, native_enum=False, length=20),
+        nullable=False,
+        default=VentaTipoAtencion.ATENDIDA,
+        server_default=VentaTipoAtencion.ATENDIDA.value,
+        index=True,
+    )
+    caja_captura_id: Mapped[int | None] = mapped_column(ForeignKey("cajas.id"), nullable=True, index=True)
+    sesion_caja_id: Mapped[int | None] = mapped_column(ForeignKey("sesiones_caja.id"), nullable=True, index=True)
+    capturada_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     cerrada_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     destino: Mapped["DestinoInventario"] = relationship()
+    caja_captura: Mapped["Caja | None"] = relationship()
+    sesion_caja: Mapped["SesionCaja | None"] = relationship()
     detalles: Mapped[list["DetalleVenta"]] = relationship(
         back_populates="venta", cascade="all, delete-orphan"
     )

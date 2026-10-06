@@ -12,6 +12,22 @@ from backend.app.models.catalogo import (
     Variante,
     VarianteValorAtributo,
 )
+from backend.app.models.caja import (
+    ArqueoCaja,
+    ArqueoCajaEstado,
+    ArqueoCajaTipo,
+    Caja,
+    EventoOperacionVenta,
+    EventoOperacionVentaTipo,
+    MovimientoCaja,
+    MovimientoCajaTipo,
+    PosibleErrorPago,
+    PosibleErrorPagoEstado,
+    SesionCaja,
+    SesionCajaEstado,
+    SolicitudCorreccionArqueo,
+    SolicitudCorreccionArqueoEstado,
+)
 from backend.app.models.commercial import MedioPago, ResolucionComercialVenta
 from backend.app.models.inventory import (
     DestinoInventario,
@@ -38,6 +54,7 @@ from backend.app.models.venta import (
     PagoVenta,
     Venta,
     VentaEstado,
+    VentaTipoAtencion,
 )
 
 __all__ = [
@@ -46,6 +63,10 @@ __all__ = [
     "ArticuloProveedor",
     "Atributo",
     "AuditoriaPrecioArticulo",
+    "ArqueoCaja",
+    "ArqueoCajaEstado",
+    "ArqueoCajaTipo",
+    "Caja",
     "Categoria",
     "CondicionComercialPrecio",
     "CondicionPrecioTipo",
@@ -54,10 +75,18 @@ __all__ = [
     "Marca",
     "MedioPago",
     "MotivoAuditoriaPrecio",
+    "MovimientoCaja",
+    "MovimientoCajaTipo",
     "OrigenPrecioArticulo",
     "PrecioArticulo",
     "Proveedor",
+    "PosibleErrorPago",
+    "PosibleErrorPagoEstado",
     "ResolucionComercialVenta",
+    "SesionCaja",
+    "SesionCajaEstado",
+    "SolicitudCorreccionArqueo",
+    "SolicitudCorreccionArqueoEstado",
     "ValorAtributo",
     "Variante",
     "VarianteValorAtributo",
@@ -72,7 +101,10 @@ __all__ = [
     "DetalleVenta",
     "EventoPendiente",
     "EventoPendienteEstado",
+    "EventoOperacionVenta",
+    "EventoOperacionVentaTipo",
     "PagoVenta",
     "Venta",
     "VentaEstado",
+    "VentaTipoAtencion",
 ]

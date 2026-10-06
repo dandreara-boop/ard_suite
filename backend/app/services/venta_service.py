@@ -71,6 +71,10 @@ class VentaService:
             numero_venta=f"TEMP-{datetime.now().strftime('%Y%m%d%H%M%S%f')}",
             destino_id=data.destino_id,
             usuario_id=data.usuario_id,
+            numero_corto=data.numero_corto,
+            referencia_cliente=data.referencia_cliente,
+            vendedor_id=data.vendedor_id,
+            tipo_atencion=data.tipo_atencion,
         )
         try:
             self.db.add(venta)
