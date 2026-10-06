@@ -4,6 +4,7 @@ from backend.app.business.catalog.variant_rules import (
     BARCODE_ALREADY_EXISTS,
     VARIANT_ALREADY_EXISTS,
 )
+from backend.app.services.venta_service import SALE_ALREADY_CAPTURED
 from backend.app.services.exceptions import (
     BusinessRuleViolation,
     ConflictError,
@@ -15,7 +16,7 @@ from backend.app.services.exceptions import (
 def map_catalog_error(error: Exception) -> HTTPException:
     if isinstance(error, BusinessRuleViolation):
         status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
-        if error.code in {BARCODE_ALREADY_EXISTS, VARIANT_ALREADY_EXISTS}:
+        if error.code in {BARCODE_ALREADY_EXISTS, VARIANT_ALREADY_EXISTS, SALE_ALREADY_CAPTURED}:
             status_code = status.HTTP_409_CONFLICT
         return HTTPException(
             status_code=status_code,

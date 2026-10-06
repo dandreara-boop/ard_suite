@@ -59,7 +59,7 @@ class SaleStateRule:
     def evaluate(self, context: SaleFinalizationContext) -> RuleResult:
         if context.estado == VentaEstado.CERRADA:
             return RuleResult.denied(SALE_ALREADY_CLOSED, "La venta ya esta cerrada.")
-        if context.estado not in {VentaEstado.ABIERTA, VentaEstado.EN_PAGO}:
+        if context.estado not in {VentaEstado.ABIERTA, VentaEstado.EN_PAGO, VentaEstado.EN_COBRO}:
             return RuleResult.denied(self.info.code, "La venta no esta en estado valido para finalizar.")
         return RuleResult.allowed("SALE_STATE_VALID", "El estado permite finalizar.")
 

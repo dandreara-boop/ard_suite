@@ -37,13 +37,16 @@ class EventoPendienteEstado(str, Enum):
 
 class Venta(TimestampMixin, Base):
     __tablename__ = "ventas"
+    __table_args__ = (
+        UniqueConstraint("destino_id", "numero_corto", name="uq_ventas_destino_numero_corto"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     global_id: Mapped[str] = mapped_column(
         String(36), nullable=False, unique=True, index=True, default=lambda: str(uuid4())
     )
     numero_venta: Mapped[str] = mapped_column(String(40), nullable=False, unique=True, index=True)
-    # Operative short number; assignment policy remains pending for Sprint 9.2.
+    # Assigned when the sale enters the cash-desk queue; never recycled after cancellation.
     numero_corto: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     referencia_cliente: Mapped[str | None] = mapped_column(String(120), nullable=True)
     destino_id: Mapped[int] = mapped_column(ForeignKey("destinos_inventario.id"), nullable=False, index=True)
@@ -77,6 +80,18 @@ class Venta(TimestampMixin, Base):
         back_populates="venta", cascade="all, delete-orphan"
     )
     pagos: Mapped[list["PagoVenta"]] = relationship(back_populates="venta", cascade="all, delete-orphan")
+
+
+class SecuenciaNumeroCortoVenta(Base):
+    __tablename__ = "secuencias_numero_corto_venta"
+
+    destino_id: Mapped[int] = mapped_column(ForeignKey("destinos_inventario.id"), primary_key=True)
+    ultimo_numero: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    destino: Mapped["DestinoInventario"] = relationship()
 
 
 class DetalleVenta(Base):

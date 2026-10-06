@@ -16,7 +16,15 @@ from backend.app.business.commercial.resolution import (
     PaymentSpec,
 )
 from backend.app.business.rules import RuleStatus
-from backend.app.models import DetalleVenta, EventoPendiente, PagoVenta, Venta, VentaEstado
+from backend.app.models import (
+    DetalleVenta,
+    EventoOperacionVenta,
+    EventoOperacionVentaTipo,
+    EventoPendiente,
+    PagoVenta,
+    Venta,
+    VentaEstado,
+)
 from backend.app.models.commercial import MedioPago, ResolucionComercialVenta
 from backend.app.models.pricing import CondicionComercialPrecio, PrecioArticulo
 from backend.app.repositories.commercial_repository import MedioPagoRepository, ResolucionComercialVentaRepository
@@ -136,6 +144,16 @@ class CommercialService:
             )
             self.db.add(snapshot)
             self.db.add(
+                EventoOperacionVenta(
+                    venta_id=venta.id,
+                    tipo=EventoOperacionVentaTipo.CONFIRMACION,
+                    usuario_id=venta.usuario_id,
+                    caja_id=venta.caja_captura_id,
+                    sesion_caja_id=venta.sesion_caja_id,
+                    payload={"estado": VentaEstado.CERRADA.value},
+                )
+            )
+            self.db.add(
                 EventoPendiente(
                     tipo=VENTA_FINALIZADA,
                     aggregate_type="VENTA",
@@ -223,6 +241,8 @@ class CommercialService:
             self._raise(COMMERCIAL_SALE_NOT_EDITABLE, "La venta ya esta cerrada.")
         if venta.estado == VentaEstado.ANULADA:
             self._raise(COMMERCIAL_SALE_NOT_EDITABLE, "La venta esta anulada.")
+        if venta.estado not in {VentaEstado.ABIERTA, VentaEstado.EN_COBRO}:
+            self._raise(COMMERCIAL_SALE_NOT_EDITABLE, "La venta no esta editable para resolucion comercial.")
 
     def _ensure_medio(self, medio_id: int) -> MedioPago:
         medio = self.get_medio(medio_id)

@@ -83,10 +83,13 @@ from backend.app.schemas.venta import (
     EventoPendienteRead,
     PagoVentaCreate,
     PagoVentaRead,
+    CapturarVentaRequest,
     ProcesarEventosRequest,
     ProcesarEventosResult,
+    VentaOperacionRequest,
     VentaCreate,
     VentaRead,
+    VentaUpdate,
 )
 
 __all__ = [
@@ -139,6 +142,7 @@ __all__ = [
     "ProveedorUpdate",
     "PagoVentaCreate",
     "PagoVentaRead",
+    "CapturarVentaRequest",
     "PrecioArticuloRead",
     "PrecioBaseArticuloRequest",
     "PrecioManualArticuloRequest",
@@ -170,4 +174,6 @@ __all__ = [
     "VarianteValorAtributoRead",
     "VentaCreate",
     "VentaRead",
+    "VentaOperacionRequest",
+    "VentaUpdate",
 ]

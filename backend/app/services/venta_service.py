@@ -5,7 +5,9 @@ from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 from uuid import UUID, uuid5
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
+from sqlalchemy.dialects.mysql import insert as mysql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from backend.app.business.rules import RuleStatus
@@ -14,10 +16,14 @@ from backend.app.business.sales.sale_rules import SaleLineContext
 from backend.app.models import (
     DetalleVenta,
     DestinoInventario,
+    Caja,
+    EventoOperacionVenta,
+    EventoOperacionVentaTipo,
     EventoPendiente,
     EventoPendienteEstado,
     MovimientoStockTipo,
     PagoVenta,
+    SecuenciaNumeroCortoVenta,
     StockEstado,
     Variante,
     Venta,
@@ -30,11 +36,14 @@ from backend.app.repositories.venta_repository import (
     VentaRepository,
 )
 from backend.app.schemas import MovimientoStockCreate
-from backend.app.schemas.venta import DetalleVentaCreate, PagoVentaCreate, VentaCreate
-from backend.app.services.exceptions import BusinessRuleViolation, NotFoundError, ValidationError
+from backend.app.schemas.venta import DetalleVentaCreate, PagoVentaCreate, VentaCreate, VentaUpdate
+from backend.app.services.exceptions import BusinessRuleViolation, ConflictError, NotFoundError, ValidationError
 from backend.app.services.inventory_service import InventoryService
 
 VENTA_FINALIZADA = "VENTA_FINALIZADA"
+SALE_ALREADY_CAPTURED = "SALE_ALREADY_CAPTURED"
+SALE_NOT_EDITABLE = "SALE_NOT_EDITABLE"
+SALE_INVALID_OPERATION_STATE = "SALE_INVALID_OPERATION_STATE"
 SALE_MOVEMENT_NAMESPACE = UUID("8a248879-2d85-4e15-98f1-c769b5ed77cb")
 MONEY = Decimal("0.01")
 QTY = Decimal("0.001")
@@ -71,7 +80,6 @@ class VentaService:
             numero_venta=f"TEMP-{datetime.now().strftime('%Y%m%d%H%M%S%f')}",
             destino_id=data.destino_id,
             usuario_id=data.usuario_id,
-            numero_corto=data.numero_corto,
             referencia_cliente=data.referencia_cliente,
             vendedor_id=data.vendedor_id,
             tipo_atencion=data.tipo_atencion,
@@ -80,6 +88,34 @@ class VentaService:
             self.db.add(venta)
             self.db.flush()
             venta.numero_venta = f"V-{venta.id:08d}"
+            self._registrar_evento_operacion(
+                venta,
+                EventoOperacionVentaTipo.CREACION,
+                usuario_id=data.usuario_id,
+                payload={"estado": venta.estado.value},
+            )
+            self.db.commit()
+            return self.get(venta.id)
+        except Exception:
+            self.db.rollback()
+            raise
+
+    def update_preparacion(self, venta_id: int, data: VentaUpdate) -> Venta:
+        try:
+            venta = self.ventas.get_full(venta_id, for_update=True)
+            if venta is None:
+                raise NotFoundError("Venta no encontrada")
+            self._ensure_preparation_editable(venta)
+            changes = data.model_dump(exclude_unset=True)
+            for field, value in changes.items():
+                setattr(venta, field, value)
+            if changes:
+                self._registrar_evento_operacion(
+                    venta,
+                    EventoOperacionVentaTipo.MODIFICACION,
+                    usuario_id=venta.usuario_id,
+                    payload={"campos": sorted(changes), "estado": venta.estado.value},
+                )
             self.db.commit()
             return self.get(venta.id)
         except Exception:
@@ -169,6 +205,13 @@ class VentaService:
             self._ensure_can_finalize(venta)
             venta.estado = VentaEstado.CERRADA
             venta.cerrada_at = datetime.now()
+            self._registrar_evento_operacion(
+                venta,
+                EventoOperacionVentaTipo.CONFIRMACION,
+                usuario_id=venta.usuario_id,
+                caja_id=venta.caja_captura_id,
+                payload={"estado": VentaEstado.CERRADA.value},
+            )
             evento = EventoPendiente(
                 tipo=VENTA_FINALIZADA,
                 aggregate_type="VENTA",
@@ -180,6 +223,152 @@ class VentaService:
                 },
             )
             self.db.add(evento)
+            self.db.commit()
+            return self.get(venta.id)
+        except Exception:
+            self.db.rollback()
+            raise
+
+    def enviar_a_caja(self, venta_id: int, *, usuario_id: int | None = None) -> Venta:
+        try:
+            venta = self.ventas.get_full(venta_id, for_update=True)
+            if venta is None:
+                raise NotFoundError("Venta no encontrada")
+            if venta.estado != VentaEstado.ABIERTA:
+                if venta.estado in {VentaEstado.CERRADA, VentaEstado.ANULADA}:
+                    raise ValidationError("La venta cerrada o anulada no puede enviarse a caja")
+                raise ConflictError("La venta no esta en estado ABIERTA")
+            if venta.numero_corto is None:
+                venta.numero_corto = self._next_numero_corto(venta.destino_id)
+            venta.estado = VentaEstado.LISTA_PARA_COBRAR
+            venta.caja_captura_id = None
+            venta.sesion_caja_id = None
+            venta.capturada_at = None
+            self._registrar_evento_operacion(
+                venta,
+                EventoOperacionVentaTipo.ENVIO_CAJA,
+                usuario_id=usuario_id,
+                payload={"numero_corto": venta.numero_corto, "estado": venta.estado.value},
+            )
+            self.db.commit()
+            return self.get(venta.id)
+        except Exception:
+            self.db.rollback()
+            raise
+
+    def listar_pendientes_caja(
+        self,
+        *,
+        destino_id: int,
+        numero_corto: int | None = None,
+        referencia_cliente: str | None = None,
+    ) -> list[Venta]:
+        statement = (
+            select(Venta)
+            .where(Venta.destino_id == destino_id, Venta.estado == VentaEstado.LISTA_PARA_COBRAR)
+            .order_by(Venta.numero_corto, Venta.id)
+        )
+        if numero_corto is not None:
+            statement = statement.where(Venta.numero_corto == numero_corto)
+        if referencia_cliente is not None:
+            statement = statement.where(Venta.referencia_cliente.ilike(f"%{referencia_cliente}%"))
+        return list(self.db.scalars(statement).all())
+
+    def capturar(self, venta_id: int, *, caja_id: int, usuario_id: int | None = None) -> Venta:
+        caja = self.db.get(Caja, caja_id)
+        if caja is None:
+            raise NotFoundError("Caja no encontrada")
+        if not caja.activa:
+            raise ValidationError("La caja esta inactiva")
+        venta = self.get(venta_id)
+        if venta.destino_id != caja.destino_id:
+            raise ValidationError("La caja no pertenece al mismo destino de la venta")
+        now = datetime.now()
+        try:
+            result = self.db.execute(
+                update(Venta)
+                .where(Venta.id == venta_id, Venta.estado == VentaEstado.LISTA_PARA_COBRAR)
+                .values(
+                    estado=VentaEstado.EN_COBRO,
+                    caja_captura_id=caja.id,
+                    capturada_at=now,
+                )
+            )
+            if result.rowcount != 1:
+                current = self.get(venta_id)
+                if current.estado == VentaEstado.EN_COBRO:
+                    raise BusinessRuleViolation(
+                        SALE_ALREADY_CAPTURED,
+                        "La venta ya fue capturada por otra caja.",
+                        RuleStatus.DENIED,
+                        {"venta_id": venta_id, "caja_captura_id": current.caja_captura_id},
+                    )
+                if current.estado in {VentaEstado.CERRADA, VentaEstado.ANULADA}:
+                    raise ValidationError("La venta cerrada o anulada no puede capturarse")
+                raise ConflictError("La venta no esta lista para cobrar")
+            captured = self.db.get(Venta, venta_id)
+            if captured is None:
+                raise NotFoundError("Venta no encontrada")
+            self._registrar_evento_operacion(
+                captured,
+                EventoOperacionVentaTipo.CAPTURA,
+                usuario_id=usuario_id,
+                caja_id=caja.id,
+                payload={"estado": VentaEstado.EN_COBRO.value},
+            )
+            self.db.commit()
+            return self.get(venta_id)
+        except Exception:
+            self.db.rollback()
+            raise
+
+    def liberar(self, venta_id: int, *, usuario_id: int | None = None) -> Venta:
+        try:
+            venta = self.ventas.get_full(venta_id, for_update=True)
+            if venta is None:
+                raise NotFoundError("Venta no encontrada")
+            if venta.estado != VentaEstado.EN_COBRO:
+                if venta.estado in {VentaEstado.CERRADA, VentaEstado.ANULADA}:
+                    raise ValidationError("La venta cerrada o anulada no puede liberarse")
+                raise ConflictError("La venta no esta capturada")
+            caja_id = venta.caja_captura_id
+            venta.estado = VentaEstado.LISTA_PARA_COBRAR
+            venta.caja_captura_id = None
+            venta.capturada_at = None
+            self._registrar_evento_operacion(
+                venta,
+                EventoOperacionVentaTipo.LIBERACION,
+                usuario_id=usuario_id,
+                caja_id=caja_id,
+                payload={"estado": venta.estado.value, "numero_corto": venta.numero_corto},
+            )
+            self.db.commit()
+            return self.get(venta.id)
+        except Exception:
+            self.db.rollback()
+            raise
+
+    def anular(self, venta_id: int, *, usuario_id: int | None = None) -> Venta:
+        try:
+            venta = self.ventas.get_full(venta_id, for_update=True)
+            if venta is None:
+                raise NotFoundError("Venta no encontrada")
+            if venta.estado == VentaEstado.CERRADA:
+                raise BusinessRuleViolation(
+                    "SALE_ALREADY_CLOSED",
+                    "La venta ya esta cerrada.",
+                    RuleStatus.DENIED,
+                )
+            if venta.estado == VentaEstado.ANULADA:
+                raise ValidationError("La venta ya esta anulada")
+            venta.estado = VentaEstado.ANULADA
+            self._registrar_evento_operacion(
+                venta,
+                EventoOperacionVentaTipo.ANULACION,
+                usuario_id=usuario_id,
+                caja_id=venta.caja_captura_id,
+                payload={"numero_corto": venta.numero_corto, "estado": venta.estado.value},
+            )
             self.db.commit()
             return self.get(venta.id)
         except Exception:
@@ -254,7 +443,78 @@ class VentaService:
             )
         if venta.estado == VentaEstado.ANULADA:
             raise ValidationError("La venta esta anulada")
+        if venta.estado == VentaEstado.LISTA_PARA_COBRAR:
+            raise BusinessRuleViolation(
+                SALE_NOT_EDITABLE,
+                "La venta esta esperando caja y no puede modificarse.",
+                RuleStatus.DENIED,
+            )
+        if venta.estado not in {VentaEstado.ABIERTA, VentaEstado.EN_COBRO, VentaEstado.EN_PAGO}:
+            raise BusinessRuleViolation(
+                SALE_INVALID_OPERATION_STATE,
+                "La venta no esta en estado editable.",
+                RuleStatus.DENIED,
+            )
         return venta
+
+    def _ensure_preparation_editable(self, venta: Venta) -> None:
+        if venta.estado != VentaEstado.ABIERTA:
+            if venta.estado in {VentaEstado.CERRADA, VentaEstado.ANULADA}:
+                raise ValidationError("La venta cerrada o anulada no puede modificarse")
+            raise BusinessRuleViolation(
+                SALE_NOT_EDITABLE,
+                "La venta no esta en preparacion editable.",
+                RuleStatus.DENIED,
+            )
+
+    def _next_numero_corto(self, destino_id: int) -> int:
+        self._initialize_short_number_sequence(destino_id)
+        sequence = self.db.scalar(
+            select(SecuenciaNumeroCortoVenta)
+            .where(SecuenciaNumeroCortoVenta.destino_id == destino_id)
+            .with_for_update()
+        )
+        if sequence is None:
+            raise RuntimeError("No se pudo inicializar la secuencia de numero corto")
+        sequence.ultimo_numero += 1
+        self.db.flush()
+        return sequence.ultimo_numero
+
+    def _initialize_short_number_sequence(self, destino_id: int) -> None:
+        values = {"destino_id": destino_id, "ultimo_numero": 0}
+        dialect_name = self.db.bind.dialect.name if self.db.bind is not None else ""
+        if dialect_name in {"mysql", "mariadb"}:
+            statement = mysql_insert(SecuenciaNumeroCortoVenta).values(**values).prefix_with("IGNORE")
+        elif dialect_name == "sqlite":
+            statement = (
+                sqlite_insert(SecuenciaNumeroCortoVenta)
+                .values(**values)
+                .on_conflict_do_nothing(index_elements=["destino_id"])
+            )
+        else:
+            statement = mysql_insert(SecuenciaNumeroCortoVenta).values(**values).prefix_with("IGNORE")
+        self.db.execute(statement)
+        self.db.flush()
+
+    def _registrar_evento_operacion(
+        self,
+        venta: Venta,
+        tipo: EventoOperacionVentaTipo,
+        *,
+        usuario_id: int | None = None,
+        caja_id: int | None = None,
+        payload: dict | None = None,
+    ) -> EventoOperacionVenta:
+        event = EventoOperacionVenta(
+            venta_id=venta.id,
+            tipo=tipo,
+            usuario_id=usuario_id,
+            caja_id=caja_id,
+            sesion_caja_id=venta.sesion_caja_id,
+            payload=payload or {},
+        )
+        self.db.add(event)
+        return event
 
     def _ensure_can_finalize(self, venta: Venta) -> None:
         blocking = self.policy.first_blocking_result(

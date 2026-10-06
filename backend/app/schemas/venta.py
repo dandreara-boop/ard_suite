@@ -16,10 +16,24 @@ class ORMModel(BaseModel):
 class VentaCreate(BaseModel):
     destino_id: int
     usuario_id: int | None = None
-    numero_corto: int | None = None
     referencia_cliente: str | None = None
     vendedor_id: int | None = None
     tipo_atencion: VentaTipoAtencion = VentaTipoAtencion.ATENDIDA
+
+
+class VentaUpdate(BaseModel):
+    referencia_cliente: str | None = None
+    vendedor_id: int | None = None
+    tipo_atencion: VentaTipoAtencion | None = None
+
+
+class VentaOperacionRequest(BaseModel):
+    usuario_id: int | None = None
+
+
+class CapturarVentaRequest(BaseModel):
+    caja_id: int
+    usuario_id: int | None = None
 
 
 class DetalleVentaCreate(BaseModel):
