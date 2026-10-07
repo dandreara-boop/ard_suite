@@ -63,6 +63,7 @@ class DetalleVentaRead(ORMModel):
 class PagoVentaRead(ORMModel):
     id: int
     venta_id: int
+    medio_pago_id: int | None
     medio_pago: str
     importe: Decimal
     created_at: datetime

@@ -14,6 +14,14 @@ class MedioPagoRepository(BaseRepository[MedioPago]):
     def get_by_codigo(self, codigo: str) -> MedioPago | None:
         return self.db.scalar(select(MedioPago).where(MedioPago.codigo == codigo))
 
+    def get_efectivo(self, *, exclude_id: int | None = None, for_update: bool = False) -> MedioPago | None:
+        statement = select(MedioPago).where(MedioPago.es_efectivo.is_(True))
+        if exclude_id is not None:
+            statement = statement.where(MedioPago.id != exclude_id)
+        if for_update:
+            statement = statement.with_for_update()
+        return self.db.scalar(statement)
+
     def list_ordered(self, active_only: bool = False) -> list[MedioPago]:
         statement = select(MedioPago).order_by(MedioPago.codigo, MedioPago.id)
         if active_only:

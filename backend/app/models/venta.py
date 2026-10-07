@@ -119,6 +119,7 @@ class PagoVenta(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     venta_id: Mapped[int] = mapped_column(ForeignKey("ventas.id"), nullable=False, index=True)
+    medio_pago_id: Mapped[int | None] = mapped_column(ForeignKey("medios_pago.id"), nullable=True, index=True)
     medio_pago: Mapped[str] = mapped_column(String(60), nullable=False)
     importe: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -126,6 +127,7 @@ class PagoVenta(Base):
     )
 
     venta: Mapped[Venta] = relationship(back_populates="pagos")
+    medio_pago_ref: Mapped["MedioPago | None"] = relationship()
 
 
 class EventoPendiente(Base):

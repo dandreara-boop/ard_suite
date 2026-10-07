@@ -21,6 +21,7 @@ class MedioPagoBase(BaseModel):
     nombre: str
     condicion_comercial_id: int
     activo: bool = True
+    es_efectivo: bool = False
 
 
 class MedioPagoCreate(MedioPagoBase):
@@ -32,6 +33,7 @@ class MedioPagoUpdate(BaseModel):
     nombre: str | None = None
     condicion_comercial_id: int | None = None
     activo: bool | None = None
+    es_efectivo: bool | None = None
 
 
 class MedioPagoRead(MedioPagoBase, ORMModel):

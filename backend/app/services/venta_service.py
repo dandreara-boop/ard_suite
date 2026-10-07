@@ -20,6 +20,7 @@ from backend.app.models import (
     EventoOperacionVentaTipo,
     EventoPendiente,
     EventoPendienteEstado,
+    MedioPago,
     MovimientoStockTipo,
     PagoVenta,
     SecuenciaNumeroCortoVenta,
@@ -170,8 +171,10 @@ class VentaService:
 
     def add_pago(self, venta_id: int, data: PagoVentaCreate) -> Venta:
         venta = self._get_editable_sale(venta_id)
+        medio = self.db.scalar(select(MedioPago).where(MedioPago.codigo == data.medio_pago))
         pago = PagoVenta(
             venta_id=venta.id,
+            medio_pago_id=medio.id if medio is not None else None,
             medio_pago=data.medio_pago,
             importe=self._quantize_money(data.importe),
         )

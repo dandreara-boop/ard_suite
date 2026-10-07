@@ -19,6 +19,7 @@ class MedioPago(TimestampMixin, Base):
         ForeignKey("condiciones_comerciales_precio.id"), nullable=False, index=True
     )
     activo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
+    es_efectivo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
 
     condicion_comercial: Mapped["CondicionComercialPrecio"] = relationship()
 

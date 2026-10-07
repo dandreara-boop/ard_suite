@@ -2,10 +2,20 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
-from backend.app.models import Caja, MovimientoCaja, MovimientoCajaTipo, SesionCaja, SesionCajaEstado
+from backend.app.models import (
+    Caja,
+    MedioPago,
+    MovimientoCaja,
+    MovimientoCajaTipo,
+    PagoVenta,
+    SesionCaja,
+    SesionCajaEstado,
+    Venta,
+    VentaEstado,
+)
 from backend.app.schemas.caja import AbrirSesionCajaResponse, MovimientoCajaCreate, SesionCajaResumenRead
 from backend.app.services.exceptions import ConflictError, NotFoundError, ValidationError
 
@@ -90,6 +100,21 @@ class CajaService:
                 .order_by(MovimientoCaja.fecha, MovimientoCaja.id)
             ).all()
         )
+
+    def total_pagos_efectivo_sesion(self, sesion_caja_id: int) -> Decimal:
+        if self.db.get(SesionCaja, sesion_caja_id) is None:
+            raise NotFoundError("Sesion de caja no encontrada")
+        total = self.db.scalar(
+            select(func.coalesce(func.sum(PagoVenta.importe), Decimal("0.00")))
+            .join(Venta, PagoVenta.venta_id == Venta.id)
+            .join(MedioPago, PagoVenta.medio_pago_id == MedioPago.id)
+            .where(
+                Venta.sesion_caja_id == sesion_caja_id,
+                Venta.estado == VentaEstado.CERRADA,
+                MedioPago.es_efectivo.is_(True),
+            )
+        )
+        return Decimal(total or Decimal("0.00")).quantize(Decimal("0.01"))
 
     def get_sesion(self, sesion_id: int) -> SesionCaja:
         sesion = self.db.scalar(

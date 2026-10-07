@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal, ROUND_HALF_UP
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.app.business.commercial.resolution import (
@@ -54,14 +55,19 @@ class CommercialService:
         self.engine = CommercialResolutionEngine()
 
     def create_medio(self, data: MedioPagoCreate) -> MedioPago:
-        if self.medios.get_by_codigo(data.codigo):
-            raise ConflictError("Ya existe un medio de pago con ese codigo")
-        self._ensure_condition(data.condicion_comercial_id, active_required=False)
-        medio = MedioPago(**data.model_dump())
-        self.medios.add(medio)
-        self.db.commit()
-        self.db.refresh(medio)
-        return medio
+        try:
+            if self.medios.get_by_codigo(data.codigo):
+                raise ConflictError("Ya existe un medio de pago con ese codigo")
+            self._ensure_condition(data.condicion_comercial_id, active_required=False)
+            self._ensure_unique_efectivo(data.es_efectivo)
+            medio = MedioPago(**data.model_dump())
+            self.medios.add(medio)
+            self.db.commit()
+            self.db.refresh(medio)
+            return medio
+        except Exception:
+            self.db.rollback()
+            raise
 
     def list_medios(self, active_only: bool = False) -> list[MedioPago]:
         return self.medios.list_ordered(active_only=active_only)
@@ -80,6 +86,8 @@ class CommercialService:
                 raise ConflictError("Ya existe un medio de pago con ese codigo")
         if data.condicion_comercial_id is not None:
             self._ensure_condition(data.condicion_comercial_id, active_required=False)
+        if data.es_efectivo is not None:
+            self._ensure_unique_efectivo(data.es_efectivo, exclude_id=medio.id)
         for field, value in data.model_dump(exclude_unset=True).items():
             setattr(medio, field, value)
         self.db.commit()
@@ -128,6 +136,7 @@ class CommercialService:
                 self.db.add(
                     PagoVenta(
                         venta_id=venta.id,
+                        medio_pago_id=result.medio_pago_id,
                         medio_pago=result.medio_pago_codigo,
                         importe=result.importe_final,
                     )
@@ -253,7 +262,7 @@ class CommercialService:
             self._raise(COMMERCIAL_SALE_NOT_EDITABLE, "La confirmacion de una venta capturada requiere usuario_id.")
         if venta.sesion_caja_id is None:
             self._raise(COMMERCIAL_SALE_NOT_EDITABLE, "La venta capturada no tiene sesion de caja.")
-        sesion = self.db.get(SesionCaja, venta.sesion_caja_id)
+        sesion = self.db.scalar(select(SesionCaja).where(SesionCaja.id == venta.sesion_caja_id).with_for_update())
         if sesion is None:
             raise NotFoundError("Sesion de caja no encontrada")
         if sesion.estado != SesionCajaEstado.ABIERTA:
@@ -286,6 +295,13 @@ class CommercialService:
         if price is None:
             self._raise(COMMERCIAL_MISSING_PRICE, "Falta precio efectivo para la condicion solicitada.")
         return price
+
+    def _ensure_unique_efectivo(self, es_efectivo: bool, *, exclude_id: int | None = None) -> None:
+        if not es_efectivo:
+            return
+        existing = self.medios.get_efectivo(exclude_id=exclude_id, for_update=True)
+        if existing is not None:
+            raise ConflictError("Ya existe un medio de pago marcado como efectivo")
 
     def _raise(self, code: str, message: str) -> None:
         raise BusinessRuleViolation(code, message, RuleStatus.DENIED)
