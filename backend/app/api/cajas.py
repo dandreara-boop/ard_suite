@@ -7,7 +7,13 @@ from sqlalchemy.orm import Session
 
 from backend.app.api.errors import map_catalog_error
 from backend.app.db.session import get_db
-from backend.app.schemas.caja import AbrirSesionCajaRequest, AbrirSesionCajaResponse, SesionCajaRead
+from backend.app.schemas.caja import (
+    AbrirSesionCajaRequest,
+    AbrirSesionCajaResponse,
+    MovimientoCajaCreate,
+    MovimientoCajaRead,
+    SesionCajaRead,
+)
 from backend.app.services.caja_service import CajaService
 from backend.app.services.exceptions import CatalogError
 
@@ -33,3 +39,27 @@ def abrir_sesion_caja(
 @router.get("/sesiones/abiertas", response_model=list[SesionCajaRead])
 def listar_sesiones_abiertas(usuario_id: int, db: Annotated[Session, Depends(get_db)]):
     return CajaService(db).listar_abiertas_por_cajero(usuario_id)
+
+
+@router.post(
+    "/sesiones/{sesion_caja_id}/movimientos",
+    response_model=MovimientoCajaRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def registrar_movimiento_caja(
+    sesion_caja_id: int,
+    data: MovimientoCajaCreate,
+    db: Annotated[Session, Depends(get_db)],
+):
+    try:
+        return CajaService(db).registrar_movimiento(sesion_caja_id, data)
+    except CatalogError as error:
+        raise map_catalog_error(error) from error
+
+
+@router.get("/sesiones/{sesion_caja_id}/movimientos", response_model=list[MovimientoCajaRead])
+def listar_movimientos_caja(sesion_caja_id: int, db: Annotated[Session, Depends(get_db)]):
+    try:
+        return CajaService(db).listar_movimientos(sesion_caja_id)
+    except CatalogError as error:
+        raise map_catalog_error(error) from error

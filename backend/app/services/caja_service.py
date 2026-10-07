@@ -5,9 +5,15 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
-from backend.app.models import Caja, SesionCaja, SesionCajaEstado
-from backend.app.schemas.caja import AbrirSesionCajaResponse, SesionCajaResumenRead
+from backend.app.models import Caja, MovimientoCaja, MovimientoCajaTipo, SesionCaja, SesionCajaEstado
+from backend.app.schemas.caja import AbrirSesionCajaResponse, MovimientoCajaCreate, SesionCajaResumenRead
 from backend.app.services.exceptions import ConflictError, NotFoundError, ValidationError
+
+MOVIMIENTOS_OPERATIVOS = {
+    MovimientoCajaTipo.INGRESO,
+    MovimientoCajaTipo.RETIRO,
+    MovimientoCajaTipo.EGRESO,
+}
 
 
 class CajaService:
@@ -52,6 +58,39 @@ class CajaService:
     def listar_abiertas_por_cajero(self, cajero_id: int) -> list[SesionCaja]:
         return list(self.db.scalars(self._sesiones_abiertas_statement(cajero_id)).all())
 
+    def registrar_movimiento(self, sesion_caja_id: int, data: MovimientoCajaCreate) -> MovimientoCaja:
+        try:
+            sesion = self._get_operable_session(sesion_caja_id, usuario_id=data.usuario_id)
+            tipo = self._validate_movimiento_tipo(data.tipo)
+            motivo = self._normalize_motivo(data.motivo)
+            if tipo == MovimientoCajaTipo.EGRESO and motivo is None:
+                raise ValidationError("El motivo es obligatorio para egresos de caja")
+            movimiento = MovimientoCaja(
+                sesion_caja_id=sesion.id,
+                tipo=tipo,
+                importe=data.importe,
+                motivo=motivo,
+                usuario_id=data.usuario_id,
+            )
+            self.db.add(movimiento)
+            self.db.commit()
+            self.db.refresh(movimiento)
+            return movimiento
+        except Exception:
+            self.db.rollback()
+            raise
+
+    def listar_movimientos(self, sesion_caja_id: int) -> list[MovimientoCaja]:
+        if self.db.get(SesionCaja, sesion_caja_id) is None:
+            raise NotFoundError("Sesion de caja no encontrada")
+        return list(
+            self.db.scalars(
+                select(MovimientoCaja)
+                .where(MovimientoCaja.sesion_caja_id == sesion_caja_id)
+                .order_by(MovimientoCaja.fecha, MovimientoCaja.id)
+            ).all()
+        )
+
     def get_sesion(self, sesion_id: int) -> SesionCaja:
         sesion = self.db.scalar(
             select(SesionCaja).options(joinedload(SesionCaja.caja)).where(SesionCaja.id == sesion_id)
@@ -68,6 +107,36 @@ class CajaService:
             .order_by(SesionCaja.abierta_at, SesionCaja.id)
         )
 
+    def _get_operable_session(self, sesion_caja_id: int, *, usuario_id: int) -> SesionCaja:
+        sesion = self.db.scalar(
+            select(SesionCaja)
+            .options(joinedload(SesionCaja.caja))
+            .where(SesionCaja.id == sesion_caja_id)
+            .with_for_update()
+        )
+        if sesion is None:
+            raise NotFoundError("Sesion de caja no encontrada")
+        if sesion.estado != SesionCajaEstado.ABIERTA:
+            raise ValidationError("La sesion de caja no esta abierta")
+        if sesion.cajero_id != usuario_id:
+            raise ValidationError("La sesion de caja pertenece a otro cajero")
+        if sesion.caja is None:
+            raise NotFoundError("Caja no encontrada")
+        if not sesion.caja.activa:
+            raise ValidationError("La caja esta inactiva")
+        return sesion
+
+    def _validate_movimiento_tipo(self, tipo: MovimientoCajaTipo) -> MovimientoCajaTipo:
+        if tipo not in MOVIMIENTOS_OPERATIVOS:
+            raise ValidationError("Tipo de movimiento de caja no soportado")
+        return tipo
+
+    def _normalize_motivo(self, motivo: str | None) -> str | None:
+        if motivo is None:
+            return None
+        stripped = motivo.strip()
+        return stripped or None
+
     def _resumen(self, sesion: SesionCaja) -> SesionCajaResumenRead:
         return SesionCajaResumenRead(
             sesion_id=sesion.id,
@@ -81,3 +150,11 @@ class CajaService:
         if bind.dialect.name != "sqlite":
             return
         self.db.connection().exec_driver_sql("BEGIN IMMEDIATE")
+
+
+def impacto_movimiento_caja(tipo: MovimientoCajaTipo, importe: Decimal) -> Decimal:
+    if tipo == MovimientoCajaTipo.INGRESO:
+        return importe
+    if tipo in {MovimientoCajaTipo.RETIRO, MovimientoCajaTipo.EGRESO}:
+        return -importe
+    raise ValidationError("Tipo de movimiento de caja no soportado")

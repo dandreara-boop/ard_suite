@@ -5,7 +5,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from backend.app.models import SesionCajaEstado
+from backend.app.models import MovimientoCajaTipo, SesionCajaEstado
 
 
 class ORMModel(BaseModel):
@@ -15,6 +15,13 @@ class ORMModel(BaseModel):
 class AbrirSesionCajaRequest(BaseModel):
     usuario_id: int
     efectivo_inicial: Decimal = Field(ge=0)
+
+
+class MovimientoCajaCreate(BaseModel):
+    usuario_id: int
+    tipo: MovimientoCajaTipo
+    importe: Decimal = Field(gt=0)
+    motivo: str | None = None
 
 
 class CajaResumenRead(ORMModel):
@@ -35,6 +42,18 @@ class SesionCajaRead(ORMModel):
     efectivo_inicial: Decimal
     estado: SesionCajaEstado
     caja: CajaResumenRead
+
+
+class MovimientoCajaRead(ORMModel):
+    id: int
+    global_id: str
+    sesion_caja_id: int
+    tipo: MovimientoCajaTipo
+    importe: Decimal
+    motivo: str | None
+    usuario_id: int | None
+    fecha: datetime
+    referencia: str | None
 
 
 class SesionCajaResumenRead(BaseModel):

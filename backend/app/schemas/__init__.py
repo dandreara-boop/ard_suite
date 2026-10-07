@@ -42,6 +42,8 @@ from backend.app.schemas.caja import (
     AbrirSesionCajaRequest,
     AbrirSesionCajaResponse,
     CajaResumenRead,
+    MovimientoCajaCreate,
+    MovimientoCajaRead,
     SesionCajaRead,
     SesionCajaResumenRead,
 )
@@ -144,6 +146,8 @@ __all__ = [
     "MedioPagoCreate",
     "MedioPagoRead",
     "MedioPagoUpdate",
+    "MovimientoCajaCreate",
+    "MovimientoCajaRead",
     "MovimientoStockCreate",
     "MovimientoStockRead",
     "PagoResolucionRequest",
