@@ -5,6 +5,7 @@ from fastapi import FastAPI
 
 from backend.app.api.articulos import router as articulos_router
 from backend.app.api.atributos import router as atributos_router
+from backend.app.api.cajas import router as cajas_router
 from backend.app.api.categorias import router as categorias_router
 from backend.app.api.comercial import medios_router, ventas_comercial_router
 from backend.app.api.familias_atributos import router as familias_atributos_router
@@ -31,6 +32,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title=settings.app_name, debug=settings.app_debug, lifespan=lifespan)
 app.include_router(health_router)
+app.include_router(cajas_router)
 app.include_router(categorias_router)
 app.include_router(familias_atributos_router)
 app.include_router(marcas_router)

@@ -16,7 +16,6 @@ from backend.app.business.sales.sale_rules import SaleLineContext
 from backend.app.models import (
     DetalleVenta,
     DestinoInventario,
-    Caja,
     EventoOperacionVenta,
     EventoOperacionVentaTipo,
     EventoPendiente,
@@ -24,6 +23,8 @@ from backend.app.models import (
     MovimientoStockTipo,
     PagoVenta,
     SecuenciaNumeroCortoVenta,
+    SesionCaja,
+    SesionCajaEstado,
     StockEstado,
     Variante,
     Venta,
@@ -196,20 +197,23 @@ class VentaService:
             self.db.rollback()
             raise
 
-    def finalizar(self, venta_id: int) -> Venta:
+    def finalizar(self, venta_id: int, *, usuario_id: int | None = None) -> Venta:
         try:
             venta = self.ventas.get_full(venta_id, for_update=True)
             if venta is None:
                 raise NotFoundError("Venta no encontrada")
             self._recalculate_totals(venta)
             self._ensure_can_finalize(venta)
+            if venta.estado == VentaEstado.EN_COBRO:
+                self._validate_sale_session_for_confirmation(venta, usuario_id=usuario_id)
             venta.estado = VentaEstado.CERRADA
             venta.cerrada_at = datetime.now()
             self._registrar_evento_operacion(
                 venta,
                 EventoOperacionVentaTipo.CONFIRMACION,
-                usuario_id=venta.usuario_id,
+                usuario_id=usuario_id if usuario_id is not None else venta.usuario_id,
                 caja_id=venta.caja_captura_id,
+                sesion_caja_id=venta.sesion_caja_id,
                 payload={"estado": VentaEstado.CERRADA.value},
             )
             evento = EventoPendiente(
@@ -274,12 +278,9 @@ class VentaService:
             statement = statement.where(Venta.referencia_cliente.ilike(f"%{referencia_cliente}%"))
         return list(self.db.scalars(statement).all())
 
-    def capturar(self, venta_id: int, *, caja_id: int, usuario_id: int | None = None) -> Venta:
-        caja = self.db.get(Caja, caja_id)
-        if caja is None:
-            raise NotFoundError("Caja no encontrada")
-        if not caja.activa:
-            raise ValidationError("La caja esta inactiva")
+    def capturar(self, venta_id: int, *, sesion_caja_id: int, usuario_id: int) -> Venta:
+        sesion = self._get_operable_session(sesion_caja_id, usuario_id=usuario_id)
+        caja = sesion.caja
         venta = self.get(venta_id)
         if venta.destino_id != caja.destino_id:
             raise ValidationError("La caja no pertenece al mismo destino de la venta")
@@ -291,6 +292,7 @@ class VentaService:
                 .values(
                     estado=VentaEstado.EN_COBRO,
                     caja_captura_id=caja.id,
+                    sesion_caja_id=sesion.id,
                     capturada_at=now,
                 )
             )
@@ -301,7 +303,11 @@ class VentaService:
                         SALE_ALREADY_CAPTURED,
                         "La venta ya fue capturada por otra caja.",
                         RuleStatus.DENIED,
-                        {"venta_id": venta_id, "caja_captura_id": current.caja_captura_id},
+                        {
+                            "venta_id": venta_id,
+                            "caja_captura_id": current.caja_captura_id,
+                            "sesion_caja_id": current.sesion_caja_id,
+                        },
                     )
                 if current.estado in {VentaEstado.CERRADA, VentaEstado.ANULADA}:
                     raise ValidationError("La venta cerrada o anulada no puede capturarse")
@@ -314,6 +320,7 @@ class VentaService:
                 EventoOperacionVentaTipo.CAPTURA,
                 usuario_id=usuario_id,
                 caja_id=caja.id,
+                sesion_caja_id=sesion.id,
                 payload={"estado": VentaEstado.EN_COBRO.value},
             )
             self.db.commit()
@@ -332,15 +339,23 @@ class VentaService:
                     raise ValidationError("La venta cerrada o anulada no puede liberarse")
                 raise ConflictError("La venta no esta capturada")
             caja_id = venta.caja_captura_id
+            sesion_caja_id = venta.sesion_caja_id
             venta.estado = VentaEstado.LISTA_PARA_COBRAR
             venta.caja_captura_id = None
+            venta.sesion_caja_id = None
             venta.capturada_at = None
             self._registrar_evento_operacion(
                 venta,
                 EventoOperacionVentaTipo.LIBERACION,
                 usuario_id=usuario_id,
                 caja_id=caja_id,
-                payload={"estado": venta.estado.value, "numero_corto": venta.numero_corto},
+                sesion_caja_id=sesion_caja_id,
+                payload={
+                    "estado": venta.estado.value,
+                    "numero_corto": venta.numero_corto,
+                    "caja_anterior_id": caja_id,
+                    "sesion_caja_anterior_id": sesion_caja_id,
+                },
             )
             self.db.commit()
             return self.get(venta.id)
@@ -503,6 +518,7 @@ class VentaService:
         *,
         usuario_id: int | None = None,
         caja_id: int | None = None,
+        sesion_caja_id: int | None = None,
         payload: dict | None = None,
     ) -> EventoOperacionVenta:
         event = EventoOperacionVenta(
@@ -510,11 +526,44 @@ class VentaService:
             tipo=tipo,
             usuario_id=usuario_id,
             caja_id=caja_id,
-            sesion_caja_id=venta.sesion_caja_id,
+            sesion_caja_id=sesion_caja_id if sesion_caja_id is not None else venta.sesion_caja_id,
             payload=payload or {},
         )
         self.db.add(event)
         return event
+
+    def _get_operable_session(self, sesion_caja_id: int, *, usuario_id: int) -> SesionCaja:
+        sesion = self.db.scalar(
+            select(SesionCaja).where(SesionCaja.id == sesion_caja_id).with_for_update()
+        )
+        if sesion is None:
+            raise NotFoundError("Sesion de caja no encontrada")
+        if sesion.estado != SesionCajaEstado.ABIERTA:
+            raise ValidationError("La sesion de caja no esta abierta")
+        if sesion.cajero_id != usuario_id:
+            raise ValidationError("La sesion de caja pertenece a otro cajero")
+        if sesion.caja is None:
+            raise NotFoundError("Caja no encontrada")
+        if not sesion.caja.activa:
+            raise ValidationError("La caja esta inactiva")
+        return sesion
+
+    def _validate_sale_session_for_confirmation(self, venta: Venta, *, usuario_id: int | None = None) -> None:
+        if usuario_id is None:
+            raise ValidationError("La confirmacion de una venta capturada requiere usuario_id")
+        if venta.sesion_caja_id is None:
+            raise ValidationError("La venta capturada no tiene sesion de caja")
+        sesion = self.db.scalar(
+            select(SesionCaja).where(SesionCaja.id == venta.sesion_caja_id).with_for_update()
+        )
+        if sesion is None:
+            raise NotFoundError("Sesion de caja no encontrada")
+        if sesion.estado != SesionCajaEstado.ABIERTA:
+            raise ValidationError("La sesion de caja no esta abierta")
+        if venta.caja_captura_id != sesion.caja_id:
+            raise ValidationError("La sesion no corresponde a la caja de captura de la venta")
+        if sesion.cajero_id != usuario_id:
+            raise ValidationError("La sesion de caja pertenece a otro cajero")
 
     def _ensure_can_finalize(self, venta: Venta) -> None:
         blocking = self.policy.first_blocking_result(

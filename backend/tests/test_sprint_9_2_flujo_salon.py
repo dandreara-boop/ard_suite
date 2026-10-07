@@ -23,6 +23,7 @@ from backend.app.models import (
     EventoOperacionVenta,
     EventoOperacionVentaTipo,
     SecuenciaNumeroCortoVenta,
+    SesionCaja,
     Variante,
     Venta,
     VentaEstado,
@@ -122,6 +123,13 @@ def create_sale(service: VentaService, destino_id: int, *, referencia: str = "An
     return venta
 
 
+def open_session(db: Session, caja_id: int, cajero_id: int = 100) -> SesionCaja:
+    sesion = SesionCaja(caja_id=caja_id, cajero_id=cajero_id, efectivo_inicial=Decimal("0.00"))
+    db.add(sesion)
+    db.commit()
+    return sesion
+
+
 def test_crear_venta_atendida_y_autoservicio_sin_vendedor(db_session: Session) -> None:
     ids = seed_salon(db_session)
     service = VentaService(db_session)
@@ -212,14 +220,18 @@ def test_captura_valida_bloquea_segunda_captura_y_saca_de_pendientes(db_session:
     service = VentaService(db_session)
     venta = service.enviar_a_caja(create_sale(service, ids["destino_id"]).id)
 
-    captured = service.capturar(venta.id, caja_id=ids["caja_id"], usuario_id=100)
+    sesion = open_session(db_session, ids["caja_id"], cajero_id=100)
+    sesion_2 = open_session(db_session, ids["caja_2_id"], cajero_id=101)
+
+    captured = service.capturar(venta.id, sesion_caja_id=sesion.id, usuario_id=100)
 
     assert captured.estado == VentaEstado.EN_COBRO
     assert captured.caja_captura_id == ids["caja_id"]
+    assert captured.sesion_caja_id == sesion.id
     assert captured.capturada_at is not None
     assert service.listar_pendientes_caja(destino_id=ids["destino_id"]) == []
     with pytest.raises(BusinessRuleViolation) as error:
-        service.capturar(venta.id, caja_id=ids["caja_2_id"], usuario_id=101)
+        service.capturar(venta.id, sesion_caja_id=sesion_2.id, usuario_id=101)
     assert error.value.code == SALE_ALREADY_CAPTURED
 
 
@@ -229,31 +241,36 @@ def test_caja_de_otro_destino_o_inactiva_no_captura(db_session: Session) -> None
     venta = service.enviar_a_caja(create_sale(service, ids["destino_id"]).id)
 
     with pytest.raises(ValidationError):
-        service.capturar(venta.id, caja_id=ids["caja_otro_destino_id"])
+        sesion_otro_destino = open_session(db_session, ids["caja_otro_destino_id"], cajero_id=100)
+        service.capturar(venta.id, sesion_caja_id=sesion_otro_destino.id, usuario_id=100)
     with pytest.raises(ValidationError):
-        service.capturar(venta.id, caja_id=ids["caja_inactiva_id"])
+        sesion_inactiva = open_session(db_session, ids["caja_inactiva_id"], cajero_id=100)
+        service.capturar(venta.id, sesion_caja_id=sesion_inactiva.id, usuario_id=100)
 
 
 def test_liberar_conserva_numero_y_anulada_no_puede_capturarse(db_session: Session) -> None:
     ids = seed_salon(db_session)
     service = VentaService(db_session)
     venta = service.enviar_a_caja(create_sale(service, ids["destino_id"]).id)
-    captured = service.capturar(venta.id, caja_id=ids["caja_id"])
+    sesion = open_session(db_session, ids["caja_id"], cajero_id=100)
+    captured = service.capturar(venta.id, sesion_caja_id=sesion.id, usuario_id=100)
 
     released = service.liberar(captured.id, usuario_id=100)
     released_estado = released.estado
     released_numero_corto = released.numero_corto
     released_caja_captura_id = released.caja_captura_id
+    released_sesion_caja_id = released.sesion_caja_id
     released_capturada_at = released.capturada_at
     anulada = service.anular(released.id, usuario_id=20)
 
     assert released_estado == VentaEstado.LISTA_PARA_COBRAR
     assert released_numero_corto == venta.numero_corto
     assert released_caja_captura_id is None
+    assert released_sesion_caja_id is None
     assert released_capturada_at is None
     assert anulada.numero_corto == venta.numero_corto
     with pytest.raises(ValidationError):
-        service.capturar(anulada.id, caja_id=ids["caja_id"])
+        service.capturar(anulada.id, sesion_caja_id=sesion.id, usuario_id=100)
 
 
 def test_lista_para_cobrar_no_permite_modificacion_normal_y_en_cobro_si(db_session: Session) -> None:
@@ -270,7 +287,8 @@ def test_lista_para_cobrar_no_permite_modificacion_normal_y_en_cobro_si(db_sessi
                 precio_unitario=Decimal("10.00"),
             ),
         )
-    captured = service.capturar(venta.id, caja_id=ids["caja_id"])
+    sesion = open_session(db_session, ids["caja_id"], cajero_id=100)
+    captured = service.capturar(venta.id, sesion_caja_id=sesion.id, usuario_id=100)
     modified = service.add_item(
         captured.id,
         DetalleVentaCreate(
@@ -306,7 +324,8 @@ def test_eventos_operacion_venta_quedan_registrados(db_session: Session) -> None
     service = VentaService(db_session)
     venta = create_sale(service, ids["destino_id"])
     sent = service.enviar_a_caja(venta.id, usuario_id=20)
-    captured = service.capturar(sent.id, caja_id=ids["caja_id"], usuario_id=100)
+    sesion = open_session(db_session, ids["caja_id"], cajero_id=100)
+    captured = service.capturar(sent.id, sesion_caja_id=sesion.id, usuario_id=100)
     released = service.liberar(captured.id, usuario_id=100)
     service.anular(released.id, usuario_id=20)
 
@@ -320,6 +339,8 @@ def test_eventos_operacion_venta_quedan_registrados(db_session: Session) -> None
         EventoOperacionVentaTipo.ANULACION,
     ]
     assert events[2].caja_id == ids["caja_id"]
+    assert events[2].sesion_caja_id == sesion.id
+    assert events[3].sesion_caja_id == sesion.id
 
 
 def test_restriccion_numero_corto_por_destino(db_session: Session) -> None:
@@ -368,8 +389,22 @@ def test_api_flujo_envio_captura_liberacion_y_conflicto(client: TestClient) -> N
         "/api/ventas/caja/pendientes",
         params={"destino_id": destino["id"], "referencia_cliente": "Cliente"},
     )
-    capturada = client.post(f"/api/ventas/{venta['id']}/capturar", json={"caja_id": caja.id, "usuario_id": 100})
-    segunda_captura = client.post(f"/api/ventas/{venta['id']}/capturar", json={"caja_id": caja_2.id})
+    sesion = client.post(
+        f"/api/cajas/{caja.id}/sesiones",
+        json={"usuario_id": 100, "efectivo_inicial": "0.00"},
+    ).json()["sesion"]
+    sesion_2 = client.post(
+        f"/api/cajas/{caja_2.id}/sesiones",
+        json={"usuario_id": 101, "efectivo_inicial": "0.00"},
+    ).json()["sesion"]
+    capturada = client.post(
+        f"/api/ventas/{venta['id']}/capturar",
+        json={"sesion_caja_id": sesion["id"], "usuario_id": 100},
+    )
+    segunda_captura = client.post(
+        f"/api/ventas/{venta['id']}/capturar",
+        json={"sesion_caja_id": sesion_2["id"], "usuario_id": 101},
+    )
     liberada = client.post(f"/api/ventas/{venta['id']}/liberar", json={"usuario_id": 100})
 
     assert enviada.status_code == 200

@@ -32,8 +32,8 @@ class VentaOperacionRequest(BaseModel):
 
 
 class CapturarVentaRequest(BaseModel):
-    caja_id: int
-    usuario_id: int | None = None
+    sesion_caja_id: int
+    usuario_id: int
 
 
 class DetalleVentaCreate(BaseModel):

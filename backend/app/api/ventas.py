@@ -117,9 +117,13 @@ def remove_pago(venta_id: int, pago_id: int, db: Annotated[Session, Depends(get_
 
 
 @router.post("/{venta_id}/finalizar", response_model=VentaRead)
-def finalizar_venta(venta_id: int, db: Annotated[Session, Depends(get_db)]):
+def finalizar_venta(
+    venta_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    data: VentaOperacionRequest | None = None,
+):
     try:
-        return VentaService(db).finalizar(venta_id)
+        return VentaService(db).finalizar(venta_id, usuario_id=data.usuario_id if data else None)
     except CatalogError as error:
         raise map_catalog_error(error) from error
 
@@ -139,7 +143,7 @@ def enviar_venta_a_caja(
 @router.post("/{venta_id}/capturar", response_model=VentaRead)
 def capturar_venta(venta_id: int, data: CapturarVentaRequest, db: Annotated[Session, Depends(get_db)]):
     try:
-        return VentaService(db).capturar(venta_id, caja_id=data.caja_id, usuario_id=data.usuario_id)
+        return VentaService(db).capturar(venta_id, sesion_caja_id=data.sesion_caja_id, usuario_id=data.usuario_id)
     except CatalogError as error:
         raise map_catalog_error(error) from error
 

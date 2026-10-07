@@ -22,6 +22,8 @@ from backend.app.models import (
     EventoOperacionVentaTipo,
     EventoPendiente,
     PagoVenta,
+    SesionCaja,
+    SesionCajaEstado,
     Venta,
     VentaEstado,
 )
@@ -114,6 +116,8 @@ class CommercialService:
             if venta is None:
                 raise NotFoundError("Venta no encontrada")
             self._ensure_sale_open(venta)
+            if venta.estado == VentaEstado.EN_COBRO:
+                self._validate_sale_session_for_confirmation(venta, usuario_id=data.usuario_id)
             if self.resoluciones.get_by_venta(venta.id) is not None:
                 self._raise(COMMERCIAL_SALE_NOT_EDITABLE, "La venta ya tiene una resolucion comercial confirmada.")
             resolution = self.simular_resolucion(venta.id, data)
@@ -147,7 +151,7 @@ class CommercialService:
                 EventoOperacionVenta(
                     venta_id=venta.id,
                     tipo=EventoOperacionVentaTipo.CONFIRMACION,
-                    usuario_id=venta.usuario_id,
+                    usuario_id=data.usuario_id if data.usuario_id is not None else venta.usuario_id,
                     caja_id=venta.caja_captura_id,
                     sesion_caja_id=venta.sesion_caja_id,
                     payload={"estado": VentaEstado.CERRADA.value},
@@ -243,6 +247,21 @@ class CommercialService:
             self._raise(COMMERCIAL_SALE_NOT_EDITABLE, "La venta esta anulada.")
         if venta.estado not in {VentaEstado.ABIERTA, VentaEstado.EN_COBRO}:
             self._raise(COMMERCIAL_SALE_NOT_EDITABLE, "La venta no esta editable para resolucion comercial.")
+
+    def _validate_sale_session_for_confirmation(self, venta: Venta, *, usuario_id: int | None = None) -> None:
+        if usuario_id is None:
+            self._raise(COMMERCIAL_SALE_NOT_EDITABLE, "La confirmacion de una venta capturada requiere usuario_id.")
+        if venta.sesion_caja_id is None:
+            self._raise(COMMERCIAL_SALE_NOT_EDITABLE, "La venta capturada no tiene sesion de caja.")
+        sesion = self.db.get(SesionCaja, venta.sesion_caja_id)
+        if sesion is None:
+            raise NotFoundError("Sesion de caja no encontrada")
+        if sesion.estado != SesionCajaEstado.ABIERTA:
+            self._raise(COMMERCIAL_SALE_NOT_EDITABLE, "La sesion de caja no esta abierta.")
+        if venta.caja_captura_id != sesion.caja_id:
+            self._raise(COMMERCIAL_SALE_NOT_EDITABLE, "La sesion no corresponde a la caja de captura de la venta.")
+        if sesion.cajero_id != usuario_id:
+            self._raise(COMMERCIAL_SALE_NOT_EDITABLE, "La sesion de caja pertenece a otro cajero.")
 
     def _ensure_medio(self, medio_id: int) -> MedioPago:
         medio = self.get_medio(medio_id)

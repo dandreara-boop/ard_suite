@@ -19,11 +19,13 @@ from backend.app.db.session import get_db
 from backend.app.main import app
 from backend.app.models import (
     Articulo,
+    Caja,
     Categoria,
     DestinoInventario,
     DestinoInventarioTipo,
     EventoPendiente,
     MovimientoStock,
+    SesionCaja,
     StockActual,
     Variante,
     VentaEstado,
@@ -206,6 +208,18 @@ def create_sale(db: Session, ctx: dict[str, object], items: list[tuple[Variante,
             venta.id,
             DetalleVentaCreate(variante_id=variante.id, cantidad=Decimal(quantity), precio_unitario=Decimal("1.00")),
         )
+    return venta.id
+
+
+def create_captured_sale(db: Session, ctx: dict[str, object], variante: Variante, cajero_id: int = 100) -> int:
+    service = VentaService(db)
+    venta_id = create_sale(db, ctx, [(variante, "1")])
+    venta = service.enviar_a_caja(venta_id, usuario_id=20)
+    caja = Caja(destino_id=ctx["destino"].id, codigo=f"CAJA-COM-{venta.id}", nombre=f"Caja comercial {venta.id}")  # type: ignore[union-attr]
+    sesion = SesionCaja(caja=caja, cajero_id=cajero_id, efectivo_inicial=Decimal("0.00"))
+    db.add_all([caja, sesion])
+    db.commit()
+    service.capturar(venta.id, sesion_caja_id=sesion.id, usuario_id=cajero_id)
     return venta.id
 
 
@@ -875,6 +889,36 @@ def test_venta_cerrada_rechaza_modificacion_y_confirmacion_atomica(db_session: S
             venta_id,
             ResolucionComercialRequest(pagos=[payment(ctx["medio_visa"])]),  # type: ignore[arg-type]
         )
+
+
+def test_confirmacion_comercial_en_cobro_exige_usuario_explicito_y_responsable(db_session: Session) -> None:
+    ctx = setup_catalog(db_session)
+    variante_1 = add_article_with_prices(db_session, ctx, "ART-COM-CASH-1", "10000", "11000")
+    variante_2 = add_article_with_prices(db_session, ctx, "ART-COM-CASH-2", "10000", "11000")
+    variante_3 = add_article_with_prices(db_session, ctx, "ART-COM-CASH-3", "10000", "11000")
+    service = CommercialService(db_session)
+    omitted_user_sale_id = create_captured_sale(db_session, ctx, variante_1, cajero_id=100)
+    wrong_user_sale_id = create_captured_sale(db_session, ctx, variante_2, cajero_id=100)
+    correct_user_sale_id = create_captured_sale(db_session, ctx, variante_3, cajero_id=100)
+
+    with pytest.raises(BusinessRuleViolation):
+        service.confirmar_resolucion(
+            omitted_user_sale_id,
+            ResolucionComercialRequest(pagos=[payment(ctx["medio_visa"])]),  # type: ignore[arg-type]
+        )
+    with pytest.raises(BusinessRuleViolation):
+        service.confirmar_resolucion(
+            wrong_user_sale_id,
+            ResolucionComercialRequest(pagos=[payment(ctx["medio_visa"])], usuario_id=101),  # type: ignore[arg-type]
+        )
+
+    snapshot = service.confirmar_resolucion(
+        correct_user_sale_id,
+        ResolucionComercialRequest(pagos=[payment(ctx["medio_visa"])], usuario_id=100),  # type: ignore[arg-type]
+    )
+
+    assert snapshot.venta_id == correct_user_sale_id
+    assert VentaService(db_session).get(correct_user_sale_id).estado == VentaEstado.CERRADA
 
 
 def test_inventario_sigue_por_evento_e_idempotente(db_session: Session) -> None:

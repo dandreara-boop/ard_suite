@@ -38,6 +38,13 @@ from backend.app.schemas.catalogo import (
     VarianteUpdate,
     VarianteValorAtributoRead,
 )
+from backend.app.schemas.caja import (
+    AbrirSesionCajaRequest,
+    AbrirSesionCajaResponse,
+    CajaResumenRead,
+    SesionCajaRead,
+    SesionCajaResumenRead,
+)
 from backend.app.schemas.commercial import (
     AsignacionComercialRead,
     CotizacionLineaRead,
@@ -94,6 +101,8 @@ from backend.app.schemas.venta import (
 
 __all__ = [
     "AjusteStockCreate",
+    "AbrirSesionCajaRequest",
+    "AbrirSesionCajaResponse",
     "AplicarRecalculoReglaRead",
     "AplicarRecalculoReglaRequest",
     "ArticuloAtributoCreate",
@@ -108,6 +117,7 @@ __all__ = [
     "AtributoRead",
     "AtributoUpdate",
     "AuditoriaPrecioArticuloRead",
+    "CajaResumenRead",
     "CategoriaCreate",
     "CategoriaRead",
     "CategoriaUpdate",
@@ -156,6 +166,8 @@ __all__ = [
     "ResolucionComercialRequest",
     "ResolucionComercialVentaRead",
     "ResultadoMedioPagoRead",
+    "SesionCajaRead",
+    "SesionCajaResumenRead",
     "StockActualRead",
     "StockRebuildResult",
     "ValorAtributoCreate",
