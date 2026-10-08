@@ -252,6 +252,18 @@ def test_pagos_legacy_resuelven_por_codigo_o_quedan_sin_fk(db_session: Session) 
     assert db_session.scalar(select(MedioPago).where(MedioPago.codigo == "NO_EXISTE")) is None
 
 
+def test_no_permite_cambiar_es_efectivo_de_medio_con_pagos_historicos(db_session: Session) -> None:
+    ctx = setup_cash_sales(db_session)
+    venta = create_captured_sale(db_session, ctx)
+    CommercialService(db_session).confirmar_resolucion(
+        venta.id,
+        ResolucionComercialRequest(pagos=[{"medio_pago_id": ctx["efectivo"].id, "tipo": "RESTO"}], usuario_id=100),  # type: ignore[union-attr]
+    )
+
+    with pytest.raises(ConflictError):
+        CommercialService(db_session).update_medio(ctx["efectivo"].id, MedioPagoUpdate(es_efectivo=False))  # type: ignore[union-attr]
+
+
 def test_total_efectivo_sesion_sin_ventas_es_cero(db_session: Session) -> None:
     ctx = setup_cash_sales(db_session)
 

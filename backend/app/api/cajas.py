@@ -10,6 +10,8 @@ from backend.app.db.session import get_db
 from backend.app.schemas.caja import (
     AbrirSesionCajaRequest,
     AbrirSesionCajaResponse,
+    CerrarSesionCajaRequest,
+    CerrarSesionCajaResponse,
     MovimientoCajaCreate,
     MovimientoCajaRead,
     SesionCajaRead,
@@ -61,5 +63,17 @@ def registrar_movimiento_caja(
 def listar_movimientos_caja(sesion_caja_id: int, db: Annotated[Session, Depends(get_db)]):
     try:
         return CajaService(db).listar_movimientos(sesion_caja_id)
+    except CatalogError as error:
+        raise map_catalog_error(error) from error
+
+
+@router.post("/sesiones/{sesion_caja_id}/cerrar", response_model=CerrarSesionCajaResponse)
+def cerrar_sesion_caja(
+    sesion_caja_id: int,
+    data: CerrarSesionCajaRequest,
+    db: Annotated[Session, Depends(get_db)],
+):
+    try:
+        return CajaService(db).cerrar_sesion(sesion_caja_id, data)
     except CatalogError as error:
         raise map_catalog_error(error) from error

@@ -24,6 +24,12 @@ class MovimientoCajaCreate(BaseModel):
     motivo: str | None = None
 
 
+class CerrarSesionCajaRequest(BaseModel):
+    usuario_id: int
+    efectivo_final_declarado: Decimal = Field(ge=0)
+    observacion_cierre: str | None = None
+
+
 class CajaResumenRead(ORMModel):
     id: int
     codigo: str
@@ -54,6 +60,17 @@ class MovimientoCajaRead(ORMModel):
     usuario_id: int | None
     fecha: datetime
     referencia: str | None
+
+
+class CerrarSesionCajaResponse(BaseModel):
+    sesion_caja_id: int
+    estado: SesionCajaEstado
+    arqueo_id: int
+    efectivo_esperado: Decimal
+    primer_conteo: Decimal
+    diferencia: Decimal
+    cerrada_at: datetime
+    arqueo_fecha: datetime
 
 
 class SesionCajaResumenRead(BaseModel):

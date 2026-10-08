@@ -87,6 +87,8 @@ class CommercialService:
         if data.condicion_comercial_id is not None:
             self._ensure_condition(data.condicion_comercial_id, active_required=False)
         if data.es_efectivo is not None:
+            if data.es_efectivo != medio.es_efectivo:
+                self._ensure_medio_sin_pagos_historicos(medio.id)
             self._ensure_unique_efectivo(data.es_efectivo, exclude_id=medio.id)
         for field, value in data.model_dump(exclude_unset=True).items():
             setattr(medio, field, value)
@@ -302,6 +304,11 @@ class CommercialService:
         existing = self.medios.get_efectivo(exclude_id=exclude_id, for_update=True)
         if existing is not None:
             raise ConflictError("Ya existe un medio de pago marcado como efectivo")
+
+    def _ensure_medio_sin_pagos_historicos(self, medio_id: int) -> None:
+        pago_id = self.db.scalar(select(PagoVenta.id).where(PagoVenta.medio_pago_id == medio_id).limit(1))
+        if pago_id is not None:
+            raise ConflictError("No se puede cambiar la clasificacion de efectivo de un medio con pagos historicos")
 
     def _raise(self, code: str, message: str) -> None:
         raise BusinessRuleViolation(code, message, RuleStatus.DENIED)
