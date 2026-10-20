@@ -3,9 +3,9 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from backend.app.models import MovimientoCajaTipo, SesionCajaEstado
+from backend.app.models import MovimientoCajaTipo, SesionCajaEstado, SolicitudCorreccionArqueoEstado
 
 
 class ORMModel(BaseModel):
@@ -28,6 +28,29 @@ class CerrarSesionCajaRequest(BaseModel):
     usuario_id: int
     efectivo_final_declarado: Decimal = Field(ge=0)
     observacion_cierre: str | None = None
+
+
+class SolicitarCorreccionArqueoRequest(BaseModel):
+    usuario_id: int
+    importe_corregido: Decimal = Field(ge=0, max_digits=12, decimal_places=2, allow_inf_nan=False)
+    motivo: str = Field(min_length=1)
+
+    @field_validator("motivo")
+    @classmethod
+    def normalize_motivo(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("El motivo de la correccion es obligatorio")
+        return value
+
+
+class SolicitarCorreccionArqueoResponse(BaseModel):
+    solicitud_id: int
+    arqueo_id: int
+    estado: SolicitudCorreccionArqueoEstado
+    conteo_original: Decimal
+    conteo_corregido_propuesto: Decimal
+    solicitada_at: datetime
 
 
 class CajaResumenRead(ORMModel):

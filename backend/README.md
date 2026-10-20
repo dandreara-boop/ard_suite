@@ -82,6 +82,50 @@ Respuesta esperada con MariaDB disponible:
 python -m pytest
 ```
 
+## Sprint 9.5C-A — Solicitud de correccion de arqueo
+
+`POST /api/cajas/arqueos/{arqueo_id}/solicitar-correccion` recibe `usuario_id`,
+`importe_corregido` (decimal no negativo, hasta Numeric(12,2)) y `motivo`
+obligatorio. Devuelve HTTP 201 con `solicitud_id`, `arqueo_id`, `estado`
+PENDIENTE, `conteo_original`, `conteo_corregido_propuesto` y `solicitada_at`.
+Solo el responsable de una sesion CERRADA puede solicitar sobre su arqueo
+CIERRE. Se conserva integro el arqueo y la sesion; no se generan movimientos,
+pagos ni cambios de ventas. Aprobacion y rechazo quedan para 9.5C-B.
+
+Se permite una sola solicitud por arqueo incluso si fue rechazada. Solicitud
+y apertura bloquean la misma fila Caja hasta commit/rollback. Las lecturas
+posteriores del plazo son bloqueantes para ver datos actuales bajo MariaDB
+REPEATABLE READ. El orden es Caja, SesionCaja, ArqueoCaja, solicitud; los
+movimientos de caja tambien toman Caja antes de SesionCaja y evitan joins
+bloqueantes. Cierre, captura y confirmacion bloquean sesion sin adquirir luego
+un lock exclusivo de Caja. El pendiente no impide abrir otro turno.
+
+El plazo vence con cualquier sesion de la misma Caja cuyo `id` sea mayor al
+de la sesion original, ABIERTA o CERRADA. Esto depende de IDs autoincrementales
+locales y de crear sesiones mediante `abrir_sesion()` bajo el lock de Caja.
+No eliminar/renumerar ese historial ni importar IDs manuales; una futura
+sincronizacion debe revisar este criterio. Las fechas pueden empatar y los
+UUID no ordenan turnos. `usuario_id` sigue siendo declarado por el cliente:
+la comparacion con el responsable no sustituye autenticacion.
+
+La revision preparada `20261016_0011` desciende de `20261007_0010` y agrega
+`motivo TEXT NOT NULL` y `UNIQUE(arqueo_id)`. **No aplicar hasta revision.**
+Requiere ventana de mantenimiento sin escritores de solicitudes. Antes de
+cualquier DDL cuenta historicos y duplicados y se detiene si encuentra
+cualquiera: no inventa motivos, no rellena valores vacios ni borra registros.
+Si hay historicos, su tratamiento requiere una estrategia explicita antes
+de desplegar. Ambas modificaciones usan un solo ALTER TABLE porque el DDL
+MariaDB no es transaccional; no se admite modo offline sin prevalidacion.
+El downgrade tambien se detiene si eliminaria motivos de solicitudes.
+
+Las pruebas funcionales usan bases SQLite aisladas creadas desde metadata.
+Las pruebas MariaDB de concurrencia intentan crear una base temporal con
+nombre aleatorio `ard_suite_test_95ca_*` usando las credenciales configuradas;
+si no hay conexion/permisos se omiten con motivo. Nunca crean ni eliminan
+tablas en la base operativa y eliminan solo su propia base temporal. Estas
+pruebas no aplican migraciones: la revision se verifica con operaciones
+simuladas y su aplicacion real sigue pendiente de revision.
+
 ## Business Rules Architecture
 
 Las reglas importantes del negocio viven fuera de routers y repositories. La secuencia esperada es:

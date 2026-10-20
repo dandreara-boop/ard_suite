@@ -161,6 +161,9 @@ class ArqueoCaja(Base):
 
 class SolicitudCorreccionArqueo(Base):
     __tablename__ = "solicitudes_correccion_arqueo"
+    __table_args__ = (
+        UniqueConstraint("arqueo_id", name="uq_solicitudes_correccion_arqueo_arqueo_id"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     global_id: Mapped[str] = mapped_column(
@@ -169,6 +172,7 @@ class SolicitudCorreccionArqueo(Base):
     arqueo_id: Mapped[int] = mapped_column(ForeignKey("arqueos_caja.id"), nullable=False, index=True)
     conteo_original: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     conteo_corregido_propuesto: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    motivo: Mapped[str] = mapped_column(Text, nullable=False)
     cajero_solicitante_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     solicitada_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     estado: Mapped[SolicitudCorreccionArqueoEstado] = mapped_column(

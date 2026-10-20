@@ -146,6 +146,7 @@ def test_arqueo_conserva_primer_conteo_en_solicitud_de_correccion(db_session: Se
         arqueo=arqueo,
         conteo_original=Decimal("950.00"),
         conteo_corregido_propuesto=Decimal("990.00"),
+        motivo="Efectivo omitido en el primer conteo",
         cajero_solicitante_id=101,
     )
     db_session.add_all([arqueo, solicitud])

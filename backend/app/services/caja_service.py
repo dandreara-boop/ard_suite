@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+import re
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from backend.app.models import (
@@ -17,6 +19,8 @@ from backend.app.models import (
     PagoVenta,
     SesionCaja,
     SesionCajaEstado,
+    SolicitudCorreccionArqueo,
+    SolicitudCorreccionArqueoEstado,
     Venta,
     VentaEstado,
 )
@@ -26,6 +30,8 @@ from backend.app.schemas.caja import (
     CerrarSesionCajaResponse,
     MovimientoCajaCreate,
     SesionCajaResumenRead,
+    SolicitarCorreccionArqueoRequest,
+    SolicitarCorreccionArqueoResponse,
 )
 from backend.app.services.exceptions import ConflictError, NotFoundError, ValidationError
 
@@ -77,6 +83,101 @@ class CajaService:
 
     def listar_abiertas_por_cajero(self, cajero_id: int) -> list[SesionCaja]:
         return list(self.db.scalars(self._sesiones_abiertas_statement(cajero_id)).all())
+
+    def solicitar_correccion_arqueo(
+        self, arqueo_id: int, data: SolicitarCorreccionArqueoRequest
+    ) -> SolicitarCorreccionArqueoResponse:
+        try:
+            importe = data.importe_corregido
+            if (
+                not isinstance(importe, Decimal)
+                or not importe.is_finite()
+                or importe < 0
+                or importe > Decimal("9999999999.99")
+                or importe != importe.quantize(Decimal("0.01"))
+            ):
+                raise ValidationError("El importe corregido debe ser no negativo y admitir Numeric(12, 2)")
+            motivo = self._normalize_motivo(data.motivo)
+            if motivo is None:
+                raise ValidationError("El motivo de la correccion es obligatorio")
+
+            self._begin_write_lock_if_sqlite()
+            # Discovery only: no business decision relies on this snapshot.
+            location = self.db.execute(
+                select(ArqueoCaja.sesion_caja_id, SesionCaja.caja_id)
+                .join(SesionCaja, ArqueoCaja.sesion_caja_id == SesionCaja.id)
+                .where(ArqueoCaja.id == arqueo_id)
+            ).first()
+            if location is None:
+                raise NotFoundError("Arqueo de caja no encontrado")
+            sesion_id, caja_id = location
+            caja = self.db.scalar(select(Caja).where(Caja.id == caja_id).with_for_update())
+            if caja is None:
+                raise NotFoundError("Caja no encontrada")
+            # Current locking reads are required after waiting for Caja under
+            # MariaDB REPEATABLE READ. Refresh any preloaded ORM identity too.
+            sesion = self.db.scalar(
+                select(SesionCaja).where(SesionCaja.id == sesion_id)
+                .with_for_update().execution_options(populate_existing=True)
+            )
+            arqueo = self.db.scalar(
+                select(ArqueoCaja).where(ArqueoCaja.id == arqueo_id)
+                .with_for_update().execution_options(populate_existing=True)
+            )
+            if sesion is None or arqueo is None:
+                raise NotFoundError("Arqueo o sesion de caja no encontrados")
+            if sesion.caja_id != caja_id or arqueo.sesion_caja_id != sesion_id:
+                raise ConflictError("El contexto del arqueo cambio; reintente la solicitud")
+            if arqueo.tipo != ArqueoCajaTipo.CIERRE:
+                raise ValidationError("Solo se puede corregir un arqueo de cierre")
+            if sesion.estado != SesionCajaEstado.CERRADA:
+                raise ConflictError("La sesion de caja debe estar cerrada")
+            if sesion.cajero_id != data.usuario_id:
+                raise ValidationError("La sesion de caja pertenece a otro cajero")
+            # IDs are local auto-increment values assigned by abrir_sesion
+            # under this same Caja lock. Dates may tie; UUIDs do not order turns.
+            posterior = self.db.scalar(
+                select(SesionCaja.id)
+                .where(SesionCaja.caja_id == caja_id, SesionCaja.id > sesion.id)
+                .order_by(SesionCaja.id).limit(1).with_for_update()
+            )
+            if posterior is not None:
+                raise ConflictError("El plazo termino: existe una sesion posterior en la misma caja")
+            previa = self.db.scalar(
+                select(SolicitudCorreccionArqueo.id)
+                .where(SolicitudCorreccionArqueo.arqueo_id == arqueo_id)
+                .limit(1).with_for_update()
+            )
+            if previa is not None:
+                raise ConflictError("El arqueo ya tiene una solicitud de correccion")
+            solicitud = SolicitudCorreccionArqueo(
+                arqueo_id=arqueo.id,
+                conteo_original=arqueo.primer_conteo,
+                conteo_corregido_propuesto=importe.quantize(Decimal("0.01")),
+                cajero_solicitante_id=data.usuario_id,
+                motivo=motivo,
+                estado=SolicitudCorreccionArqueoEstado.PENDIENTE,
+            )
+            self.db.add(solicitud)
+            self.db.flush()
+            response = SolicitarCorreccionArqueoResponse(
+                solicitud_id=solicitud.id,
+                arqueo_id=solicitud.arqueo_id,
+                estado=solicitud.estado,
+                conteo_original=solicitud.conteo_original,
+                conteo_corregido_propuesto=solicitud.conteo_corregido_propuesto,
+                solicitada_at=solicitud.solicitada_at,
+            )
+            self.db.commit()
+            return response
+        except IntegrityError as error:
+            self.db.rollback()
+            if _is_duplicate_correction(error):
+                raise ConflictError("El arqueo ya tiene una solicitud de correccion") from error
+            raise
+        except Exception:
+            self.db.rollback()
+            raise
 
     def registrar_movimiento(self, sesion_caja_id: int, data: MovimientoCajaCreate) -> MovimientoCaja:
         try:
@@ -212,11 +313,17 @@ class CajaService:
         )
 
     def _get_operable_session(self, sesion_caja_id: int, *, usuario_id: int) -> SesionCaja:
+        # Match apertura/correccion: Caja first, then SesionCaja. A joined
+        # FOR UPDATE could otherwise acquire session and Caja in reverse order.
+        caja_id = self.db.scalar(select(SesionCaja.caja_id).where(SesionCaja.id == sesion_caja_id))
+        if caja_id is None:
+            raise NotFoundError("Sesion de caja no encontrada")
+        caja = self.db.scalar(select(Caja).where(Caja.id == caja_id).with_for_update())
         sesion = self.db.scalar(
             select(SesionCaja)
-            .options(joinedload(SesionCaja.caja))
             .where(SesionCaja.id == sesion_caja_id)
             .with_for_update()
+            .execution_options(populate_existing=True)
         )
         if sesion is None:
             raise NotFoundError("Sesion de caja no encontrada")
@@ -224,9 +331,9 @@ class CajaService:
             raise ValidationError("La sesion de caja no esta abierta")
         if sesion.cajero_id != usuario_id:
             raise ValidationError("La sesion de caja pertenece a otro cajero")
-        if sesion.caja is None:
+        if caja is None:
             raise NotFoundError("Caja no encontrada")
-        if not sesion.caja.activa:
+        if not caja.activa:
             raise ValidationError("La caja esta inactiva")
         return sesion
 
@@ -254,6 +361,19 @@ class CajaService:
         if bind.dialect.name != "sqlite":
             return
         self.db.connection().exec_driver_sql("BEGIN IMMEDIATE")
+
+
+def _is_duplicate_correction(error: IntegrityError) -> bool:
+    """Only the arqueo FK uniqueness violation maps to a duplicate request."""
+    original = error.orig
+    args = getattr(original, "args", ())
+    if args and args[0] == 1062:
+        key = re.search(r"for key ['`]([^'`]+)['`]", str(original), re.IGNORECASE)
+        return bool(key and key.group(1).split(".")[-1] == "uq_solicitudes_correccion_arqueo_arqueo_id")
+    return (
+        getattr(original, "sqlite_errorname", None) == "SQLITE_CONSTRAINT_UNIQUE"
+        and str(original) == "UNIQUE constraint failed: solicitudes_correccion_arqueo.arqueo_id"
+    )
 
 
 def impacto_movimiento_caja(tipo: MovimientoCajaTipo, importe: Decimal) -> Decimal:

@@ -15,11 +15,29 @@ from backend.app.schemas.caja import (
     MovimientoCajaCreate,
     MovimientoCajaRead,
     SesionCajaRead,
+    SolicitarCorreccionArqueoRequest,
+    SolicitarCorreccionArqueoResponse,
 )
 from backend.app.services.caja_service import CajaService
 from backend.app.services.exceptions import CatalogError
 
 router = APIRouter(prefix="/api/cajas", tags=["cajas"])
+
+
+@router.post(
+    "/arqueos/{arqueo_id}/solicitar-correccion",
+    response_model=SolicitarCorreccionArqueoResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def solicitar_correccion_arqueo(
+    arqueo_id: int,
+    data: SolicitarCorreccionArqueoRequest,
+    db: Annotated[Session, Depends(get_db)],
+):
+    try:
+        return CajaService(db).solicitar_correccion_arqueo(arqueo_id, data)
+    except CatalogError as error:
+        raise map_catalog_error(error) from error
 
 
 @router.post("/{caja_id}/sesiones", response_model=AbrirSesionCajaResponse, status_code=status.HTTP_201_CREATED)
