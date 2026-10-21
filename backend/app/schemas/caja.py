@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -51,6 +52,37 @@ class SolicitarCorreccionArqueoResponse(BaseModel):
     conteo_original: Decimal
     conteo_corregido_propuesto: Decimal
     solicitada_at: datetime
+
+
+class ResolverSolicitudCorreccionRequest(BaseModel):
+    supervisor_id: int = Field(strict=True, gt=0, le=2147483647)
+    decision: Literal[
+        SolicitudCorreccionArqueoEstado.APROBADA,
+        SolicitudCorreccionArqueoEstado.RECHAZADA,
+    ]
+    observacion: str = Field(min_length=1)
+
+    @field_validator("observacion")
+    @classmethod
+    def normalize_observacion(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("La observacion de resolucion es obligatoria")
+        return value
+
+
+class ResolverSolicitudCorreccionResponse(BaseModel):
+    solicitud_id: int
+    arqueo_id: int
+    estado: SolicitudCorreccionArqueoEstado
+    supervisor_id: int
+    resuelta_at: datetime
+    observacion: str
+    conteo_original: Decimal
+    conteo_corregido_propuesto: Decimal
+    importe_reconocido: Decimal
+    diferencia_original: Decimal
+    diferencia_corregida: Decimal | None
 
 
 class CajaResumenRead(ORMModel):

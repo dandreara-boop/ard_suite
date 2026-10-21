@@ -9,6 +9,9 @@ class Settings(BaseSettings):
     app_name: str = Field(default="ARD Suite API", alias="APP_NAME")
     app_env: str = Field(default="development", alias="APP_ENV")
     app_debug: bool = Field(default=False, alias="APP_DEBUG")
+    caja_correcciones_resolucion_dev_enabled: bool = Field(
+        default=False, alias="CAJA_CORRECCIONES_RESOLUCION_DEV_ENABLED"
+    )
 
     db_host: str = Field(default="127.0.0.1", alias="DB_HOST")
     db_port: int = Field(default=3306, alias="DB_PORT")

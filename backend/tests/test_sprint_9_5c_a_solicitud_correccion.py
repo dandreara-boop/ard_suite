@@ -3,22 +3,21 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 import importlib.util
+import os
 from pathlib import Path
 import sqlite3
 from threading import Barrier, Event
 from types import SimpleNamespace
 from unittest.mock import Mock
-from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError as SchemaValidationError
-from sqlalchemy import create_engine, event, func, select, text
-from sqlalchemy.exc import IntegrityError, OperationalError
+from sqlalchemy import create_engine, event, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from backend.app.core.config import settings
 from backend.app.db.base import Base
 from backend.app.db.session import get_db
 from backend.app.main import app
@@ -30,6 +29,7 @@ from backend.app.models import (
 from backend.app.schemas.caja import CerrarSesionCajaRequest, SolicitarCorreccionArqueoRequest
 from backend.app.services.caja_service import CajaService, _is_duplicate_correction
 from backend.app.services.exceptions import ConflictError, NotFoundError, ValidationError
+from backend.tests.mariadb_test_support import MariaDBTestsNotSelected, mariadb_test_sessions
 
 
 @pytest.fixture()
@@ -273,31 +273,21 @@ def test_contrato_endpoint_y_errores(db_session):
 
 @pytest.fixture(params=["sqlite", "mariadb"])
 def concurrent_sessions(request, tmp_path):
-    admin = None
-    database = None
-    if request.param == "sqlite":
-        engine = create_engine(f"sqlite+pysqlite:///{tmp_path / '95ca.db'}", connect_args={"check_same_thread": False})
-    else:
-        # Never create/drop tables in the configured operational database.
-        # A fresh random database is the only permitted MariaDB test target.
-        database = "ard_suite_test_95ca_" + uuid4().hex
-        admin = create_engine(settings.sqlalchemy_database_uri, connect_args={"connect_timeout": 3})
+    if request.param == "mariadb":
         try:
-            with admin.connect() as connection:
-                connection.execute(text(f"CREATE DATABASE `{database}`"))
-        except OperationalError as error:
-            admin.dispose()
-            pytest.skip(f"MariaDB aislada no disponible (codigo {error.orig.args[0]})")
-        engine = create_engine(admin.url.set(database=database), isolation_level="REPEATABLE READ")
+            with mariadb_test_sessions(os.environ, Base.metadata) as sessions:
+                yield sessions
+        except MariaDBTestsNotSelected as error:
+            pytest.skip(str(error))
+        return
+    if request.param != "sqlite":
+        raise ValueError("Motor de pruebas no soportado")
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / '95ca.db'}", connect_args={"check_same_thread": False})
     try:
         Base.metadata.create_all(engine)
         yield sessionmaker(bind=engine, expire_on_commit=False), engine
     finally:
         engine.dispose()
-        if admin is not None:
-            with admin.connect() as connection:
-                connection.execute(text(f"DROP DATABASE `{database}`"))
-            admin.dispose()
 
 
 def test_solicitudes_simultaneas_dejan_una_sola(concurrent_sessions):

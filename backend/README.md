@@ -90,7 +90,7 @@ obligatorio. Devuelve HTTP 201 con `solicitud_id`, `arqueo_id`, `estado`
 PENDIENTE, `conteo_original`, `conteo_corregido_propuesto` y `solicitada_at`.
 Solo el responsable de una sesion CERRADA puede solicitar sobre su arqueo
 CIERRE. Se conserva integro el arqueo y la sesion; no se generan movimientos,
-pagos ni cambios de ventas. Aprobacion y rechazo quedan para 9.5C-B.
+pagos ni cambios de ventas. La resolucion administrativa se describe en 9.5C-B.
 
 Se permite una sola solicitud por arqueo incluso si fue rechazada. Solicitud
 y apertura bloquean la misma fila Caja hasta commit/rollback. Las lecturas
@@ -108,8 +108,8 @@ sincronizacion debe revisar este criterio. Las fechas pueden empatar y los
 UUID no ordenan turnos. `usuario_id` sigue siendo declarado por el cliente:
 la comparacion con el responsable no sustituye autenticacion.
 
-La revision preparada `20261016_0011` desciende de `20261007_0010` y agrega
-`motivo TEXT NOT NULL` y `UNIQUE(arqueo_id)`. **No aplicar hasta revision.**
+La revision `20261016_0011` desciende de `20261007_0010` y agrega
+`motivo TEXT NOT NULL` y `UNIQUE(arqueo_id)`.
 Requiere ventana de mantenimiento sin escritores de solicitudes. Antes de
 cualquier DDL cuenta historicos y duplicados y se detiene si encuentra
 cualquiera: no inventa motivos, no rellena valores vacios ni borra registros.
@@ -119,12 +119,191 @@ MariaDB no es transaccional; no se admite modo offline sin prevalidacion.
 El downgrade tambien se detiene si eliminaria motivos de solicitudes.
 
 Las pruebas funcionales usan bases SQLite aisladas creadas desde metadata.
-Las pruebas MariaDB de concurrencia intentan crear una base temporal con
-nombre aleatorio `ard_suite_test_95ca_*` usando las credenciales configuradas;
-si no hay conexion/permisos se omiten con motivo. Nunca crean ni eliminan
-tablas en la base operativa y eliminan solo su propia base temporal. Estas
+Las pruebas MariaDB de concurrencia requieren seleccion explicita de la base
+dedicada `ard_suite_test` mediante `ARD_TEST_DB_*`, como se detalla mas abajo.
+No usan la conexion de desarrollo ni crean o eliminan bases de datos. Estas
 pruebas no aplican migraciones: la revision se verifica con operaciones
-simuladas y su aplicacion real sigue pendiente de revision.
+simuladas y no se certifica el estado del esquema de cada entorno operativo.
+
+## Sprint 9.5C-B — Resolucion administrativa de correcciones
+
+`POST /api/cajas/solicitudes-correccion/{solicitud_id}/resolver` recibe
+`supervisor_id` (entero positivo, hasta 2147483647), `decision` (`APROBADA` o
+`RECHAZADA`) y `observacion` obligatoria, normalizada sin espacios externos.
+Solo resuelve solicitudes PENDIENTES, una unica vez. Registra estado,
+supervisor, fecha de resolucion y observacion. La fecha sigue la convencion
+de fecha local del backend, con precision de segundos compatible con el
+DATETIME existente en MariaDB.
+
+Devuelve HTTP 200 con `solicitud_id`, `arqueo_id`, `estado`, `supervisor_id`,
+`resuelta_at`, `observacion`, `conteo_original`, `conteo_corregido_propuesto`,
+`importe_reconocido`, `diferencia_original` y `diferencia_corregida`. Los importes
+se serializan como decimales con dos posiciones; la diferencia corregida es
+`null` cuando se rechaza. Solicitud inexistente: 404; ya resuelta o historial
+incompleto/inconsistente: 409; entrada invalida: 422.
+
+Al aprobar, el importe reconocido es el conteo corregido propuesto y la
+diferencia corregida es `conteo_corregido_propuesto - arqueo.efectivo_esperado`.
+Se admite diferencia residual positiva, negativa o cero. Al rechazar, el
+importe reconocido sigue siendo `arqueo.primer_conteo`. En ambos casos se
+conserva y devuelve la diferencia original. Aprobar reconoce un conteo:
+no justifica faltantes ni atribuye responsabilidad al cajero.
+
+Se utiliza exclusivamente el efectivo esperado historico del arqueo, sin
+recalcular ventas, pagos o movimientos actuales. Si faltan importes historicos,
+el conteo original no coincide o la diferencia original es inconsistente,
+la resolucion se rechaza y la solicitud permanece pendiente. No se modifica
+ArqueoCaja (tampoco su estado), SesionCaja, ventas ni pagos; no se generan
+movimientos automaticos ni se reabre una sesion. Los campos existentes cubren
+el alcance: este sprint no agrega migraciones ni columnas derivadas.
+
+La transaccion MariaDB toma `SELECT FOR UPDATE` exclusivamente sobre la fila
+de la solicitud y refresca su identidad ORM despues de adquirir el bloqueo.
+Lee el arqueo sin bloqueo, actualiza solo los cuatro campos de resolucion y
+ejecuta un unico commit; ante errores hace rollback. Un segundo supervisor
+encuentra el estado final y recibe conflicto. No toma bloqueos sobre Caja,
+SesionCaja ni ArqueoCaja, ni invierte el orden de bloqueos de la solicitud
+original. SQLite utiliza el `BEGIN IMMEDIATE` existente: su bloqueo de escritura
+es mas amplio y sus pruebas no sustituyen concurrencia real MariaDB.
+
+### Recuperacion de conflictos de snapshot en MariaDB
+
+Con `REPEATABLE READ` e `innodb_snapshot_isolation=ON` (valor predeterminado
+desde MariaDB 11.6.2), una fila modificada o insertada por otra transaccion
+puede quedar fuera de la vista de lectura previa. Al intentar bloquearla,
+MariaDB puede devolver 1020 (`ER_CHECKREAD`). Esto afecta tanto la deteccion
+de solicitudes/sesiones nuevas como la resolucion de solicitudes que otro
+supervisor ya modifico. `populate_existing` refresca la identidad ORM, pero
+no renueva el snapshot del servidor. Ver la documentacion de
+[innodb_snapshot_isolation](https://mariadb.com/docs/server/server-usage/storage-engines/innodb/innodb-system-variables#innodb_snapshot_isolation).
+
+Apertura, creacion de solicitud y resolucion comparten un limite de tres
+intentos totales. Solo reintentan `OperationalError` de los dialectos
+MySQL/MariaDB con codigo numerico 1020, 1205 (lock timeout) o 1213 (deadlock),
+sin conexion invalidada y antes de intentar el commit. Siempre ejecutan
+rollback completo antes de repetir: la siguiente consulta inicia una nueva
+transaccion, vuelve a adquirir los bloqueos y valida otra vez el negocio.
+No se repite un SELECT aislado dentro del snapshot fallido ni se usan savepoints.
+
+Se conserva `SELECT FOR UPDATE` y el orden Caja -> Sesion -> Arqueo -> solicitud
+en la creacion; la resolucion bloquea solo la solicitud y lee el arqueo sin
+bloquear sus padres. Las lecturas ORM bloqueantes refrescan las identidades.
+Las operaciones repetibles solo preparan cambios transaccionales, sin efectos
+externos. La respuesta se prepara antes del unico commit; en apertura tampoco
+hay una lectura posterior al commit que pueda disparar la repeticion.
+
+Si la nueva lectura confirma solicitud duplicada, resolucion previa o plazo
+vencido, devuelve `ConflictError` / HTTP 409. El 1020 por si solo no equivale
+a un conflicto de negocio: si persiste tras tres intentos, sigue siendo error
+tecnico. Los errores SQL restantes se propagan sin reintento ni traduccion a
+409. Un error durante el commit tampoco se reintenta automaticamente, para
+evitar duplicaciones cuando no puede determinarse si llego a confirmarse.
+El consumidor debe verificar el resultado antes de repetir una operacion
+cuyo commit haya tenido un desenlace incierto.
+
+No se cambia el aislamiento ni `innodb_snapshot_isolation`, no se alteran
+importes historicos y no se generan movimientos automaticos. Las pruebas de
+recuperacion inyectan errores del driver sobre SQLite y verifican rollback,
+transacciones distintas, limites y relectura del ganador. No reemplazan los
+siete escenarios reales MariaDB, que conservan sus snapshots previos.
+
+La apertura de otro turno vence el plazo para CREAR una solicitud, pero no
+impide RESOLVER una ya registrada. Las solicitudes pendientes, aprobadas o
+rechazadas no condicionan aperturas, movimientos, ventas ni cobros.
+
+### Acceso restringido a desarrollo y pruebas
+
+No existe autenticacion ni autorizacion de supervisores en este backend.
+`supervisor_id` es declarado por el cliente: validar su formato no acredita
+identidad, existencia ni permisos. Este endpoint **no debe habilitarse para
+usuarios operativos sin autorizacion confiable del lado servidor**. Antes de
+produccion se debe integrar esa autorizacion; este sprint no la implementa.
+
+El endpoint permanece deshabilitado por defecto (HTTP 404, antes de acceder
+a la base). Solo admite habilitacion explicita con
+`CAJA_CORRECCIONES_RESOLUCION_DEV_ENABLED=true` y `APP_ENV` igual a `development`,
+`test` o `testing`. En otros entornos permanece cerrado incluso con el flag
+activo. El flag no es un permiso ni una credencial y no sustituye autorizacion.
+No se activa automaticamente ni afecta los demas endpoints. Las pruebas lo
+habilitan temporalmente en memoria; no cambian `.env`.
+
+Las pruebas de 9.5C-B reutilizan las bases SQLite aisladas y la fixture MariaDB
+protegida de 9.5C-A. Cubren importes, auditoria, rollback, inmutabilidad,
+continuidad comercial y contrato HTTP, ademas de carreras entre supervisores
+con identidades precargadas. Una prueba exclusiva MariaDB comprueba operacion
+comercial mientras la resolucion mantiene su bloqueo. Sin seleccion explicita
+de MariaDB se omiten esos casos; con configuracion parcial/insegura o errores
+de conexion/permisos fallan, sin recurrir a otra base.
+
+### MariaDB real para las siete pruebas de concurrencia
+
+`backend/tests/mariadb_test_support.py` configura una conexion independiente
+`mysql+pymysql`, con aislamiento `REPEATABLE READ`, a `127.0.0.1:3307` y
+exclusivamente `ard_suite_test`. No lee `.env`, `DATABASE_URL`, `DB_*` ni
+`settings.sqlalchemy_database_uri` para seleccionar la conexion de pruebas.
+La aplicacion conserva su configuracion habitual; la fixture la sustituye
+por sesiones vinculadas al engine de pruebas.
+
+Se requieren todas estas variables del proceso, sin guardarlas en el repositorio:
+
+| Variable | Valor requerido |
+| --- | --- |
+| `ARD_TEST_DB_HOST` | `127.0.0.1` |
+| `ARD_TEST_DB_PORT` | `3307` |
+| `ARD_TEST_DB_NAME` | `ard_suite_test` (coincidencia exacta) |
+| `ARD_TEST_DB_USER` | Usuario con privilegios sobre esa base |
+| `ARD_TEST_DB_PASSWORD` | Password explicito del usuario; no se hereda de desarrollo |
+| `ARD_TEST_DB_RESET` | `1`: autoriza crear y eliminar las tablas propias de las pruebas |
+
+La base debe existir y estar vacia al comenzar cada caso. La fixture rechaza
+tablas o vistas preexistentes, incluidos restos de una ejecucion interrumpida;
+no intenta eliminarlos automaticamente. Cada caso crea las tablas de metadata
+y elimina solo esas tablas al finalizar, tambien ante errores. No ejecuta
+Alembic, `CREATE DATABASE` ni `DROP DATABASE`; los privilegios sobre
+`ard_suite_test` son suficientes, sin permisos globales para crear bases.
+
+Antes del DDL y en cada conexion entregada a un worker valida `SELECT DATABASE(),
+@@port, VERSION()`: exige la base exacta, puerto 3307 y servidor MariaDB. Vuelve
+a validar antes de limpiar y rechaza metadata con esquemas explicitos o claves
+foraneas entre bases. Un `GET_LOCK` exclusivo durante toda la fixture impide
+dos ejecuciones simultaneas sobre este esquema; una segunda ejecucion falla
+en lugar de borrar tablas ajenas. Reservar `ard_suite_test` exclusivamente
+para estas pruebas, sin otros procesos que escriban en ella.
+
+El driver PyMySQL y el dialecto SQLAlchemy existentes utilizan el puerto
+configurado y SQL MariaDB (`FOR UPDATE`, `GET_LOCK`, `REPEATABLE READ`). Las
+validaciones simuladas cubren una identidad `12.2.2-MariaDB`; la compatibilidad
+y concurrencia reales requieren ejecutar expresamente los siete casos.
+
+Desde la raiz del repositorio, este bloque PowerShell prepara variables solo
+para el proceso, solicita credenciales sin imprimirlas y ejecuta exactamente
+los siete casos MariaDB. **Crea y limpia tablas en la base de pruebas**; usarlo
+solo al autorizar su ejecucion. No es necesario habilitar el endpoint HTTP.
+
+```powershell
+$testCredential = Get-Credential -UserName 'ard_suite' -Message 'MariaDB: base ard_suite_test'
+try {
+    $env:ARD_TEST_DB_HOST = '127.0.0.1'
+    $env:ARD_TEST_DB_PORT = '3307'
+    $env:ARD_TEST_DB_NAME = 'ard_suite_test'
+    $env:ARD_TEST_DB_USER = $testCredential.UserName
+    $env:ARD_TEST_DB_PASSWORD = $testCredential.GetNetworkCredential().Password
+    $env:ARD_TEST_DB_RESET = '1'
+    .\.venv\Scripts\python.exe -B -m pytest -p no:cacheprovider backend/tests/test_sprint_9_5c_a_solicitud_correccion.py backend/tests/test_sprint_9_5c_b_resolucion_correccion.py -k mariadb -q -rs
+} finally {
+    'ARD_TEST_DB_HOST', 'ARD_TEST_DB_PORT', 'ARD_TEST_DB_NAME', 'ARD_TEST_DB_USER', 'ARD_TEST_DB_PASSWORD', 'ARD_TEST_DB_RESET' | ForEach-Object {
+        Remove-Item -LiteralPath "Env:$_" -ErrorAction SilentlyContinue
+    }
+    $testCredential = $null
+}
+```
+
+Para listar esos casos sin abrir conexiones ni crear tablas, ejecutar el mismo
+comando Python con `--collect-only`. Las protecciones se verifican sin MariaDB:
+
+```powershell
+.\.venv\Scripts\python.exe -B -m pytest -p no:cacheprovider backend/tests/test_mariadb_test_safety.py -q
+```
 
 ## Business Rules Architecture
 
