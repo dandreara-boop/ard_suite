@@ -120,7 +120,7 @@ El downgrade tambien se detiene si eliminaria motivos de solicitudes.
 
 Las pruebas funcionales usan bases SQLite aisladas creadas desde metadata.
 Las pruebas MariaDB de concurrencia requieren seleccion explicita de la base
-dedicada `ard_suite_test` mediante `ARD_TEST_DB_*`, como se detalla mas abajo.
+dedicada `ard_suite_pytest` mediante `ARD_TEST_DB_*`, como se detalla mas abajo.
 No usan la conexion de desarrollo ni crean o eliminan bases de datos. Estas
 pruebas no aplican migraciones: la revision se verifica con operaciones
 simuladas y no se certifica el estado del esquema de cada entorno operativo.
@@ -237,9 +237,17 @@ de conexion/permisos fallan, sin recurrir a otra base.
 
 ### MariaDB real para las siete pruebas de concurrencia
 
+Las bases tienen usos separados y no son intercambiables:
+
+| Base | Uso |
+| --- | --- |
+| `ard_suite_dev` | Desarrollo; la fixture de integracion la rechaza |
+| `ard_suite_test` | Validacion de migraciones; conservar su esquema y datos; la fixture la rechaza |
+| `ard_suite_pytest` | Integracion automatizada; debe estar vacia al comenzar cada caso |
+
 `backend/tests/mariadb_test_support.py` configura una conexion independiente
 `mysql+pymysql`, con aislamiento `REPEATABLE READ`, a `127.0.0.1:3307` y
-exclusivamente `ard_suite_test`. No lee `.env`, `DATABASE_URL`, `DB_*` ni
+exclusivamente `ard_suite_pytest`. No lee `.env`, `DATABASE_URL`, `DB_*` ni
 `settings.sqlalchemy_database_uri` para seleccionar la conexion de pruebas.
 La aplicacion conserva su configuracion habitual; la fixture la sustituye
 por sesiones vinculadas al engine de pruebas.
@@ -250,7 +258,7 @@ Se requieren todas estas variables del proceso, sin guardarlas en el repositorio
 | --- | --- |
 | `ARD_TEST_DB_HOST` | `127.0.0.1` |
 | `ARD_TEST_DB_PORT` | `3307` |
-| `ARD_TEST_DB_NAME` | `ard_suite_test` (coincidencia exacta) |
+| `ARD_TEST_DB_NAME` | `ard_suite_pytest` (coincidencia exacta) |
 | `ARD_TEST_DB_USER` | Usuario con privilegios sobre esa base |
 | `ARD_TEST_DB_PASSWORD` | Password explicito del usuario; no se hereda de desarrollo |
 | `ARD_TEST_DB_RESET` | `1`: autoriza crear y eliminar las tablas propias de las pruebas |
@@ -260,14 +268,26 @@ tablas o vistas preexistentes, incluidos restos de una ejecucion interrumpida;
 no intenta eliminarlos automaticamente. Cada caso crea las tablas de metadata
 y elimina solo esas tablas al finalizar, tambien ante errores. No ejecuta
 Alembic, `CREATE DATABASE` ni `DROP DATABASE`; los privilegios sobre
-`ard_suite_test` son suficientes, sin permisos globales para crear bases.
+`ard_suite_pytest` son suficientes, sin permisos globales para crear bases.
+
+Crear la base manualmente con una cuenta administradora, fuera de pytest,
+solo despues de comprobar el servidor y que el nombre no este ocupado.
+No recrear una base existente ni usar creacion condicional para omitir esa
+revision. Usar una cuenta dedicada con permisos solo sobre `ard_suite_pytest`,
+sin acceso a desarrollo ni a la base de migraciones. No aplicar Alembic a esta
+base: la fixture crea las estructuras desde metadata.
+
+El DDL de MariaDB puede confirmarse automaticamente. Una interrupcion puede
+dejar estructuras residuales que un rollback no revierte. La siguiente
+ejecucion las rechazara; inspeccionarlas manualmente antes de continuar,
+sin limpieza indiscriminada ni reintentos automaticos.
 
 Antes del DDL y en cada conexion entregada a un worker valida `SELECT DATABASE(),
 @@port, VERSION()`: exige la base exacta, puerto 3307 y servidor MariaDB. Vuelve
 a validar antes de limpiar y rechaza metadata con esquemas explicitos o claves
 foraneas entre bases. Un `GET_LOCK` exclusivo durante toda la fixture impide
 dos ejecuciones simultaneas sobre este esquema; una segunda ejecucion falla
-en lugar de borrar tablas ajenas. Reservar `ard_suite_test` exclusivamente
+en lugar de borrar tablas ajenas. Reservar `ard_suite_pytest` exclusivamente
 para estas pruebas, sin otros procesos que escriban en ella.
 
 El driver PyMySQL y el dialecto SQLAlchemy existentes utilizan el puerto
@@ -276,23 +296,46 @@ validaciones simuladas cubren una identidad `12.2.2-MariaDB`; la compatibilidad
 y concurrencia reales requieren ejecutar expresamente los siete casos.
 
 Desde la raiz del repositorio, este bloque PowerShell prepara variables solo
-para el proceso, solicita credenciales sin imprimirlas y ejecuta exactamente
+para el proceso hijo, solicita credenciales sin imprimirlas y ejecuta exactamente
 los siete casos MariaDB. **Crea y limpia tablas en la base de pruebas**; usarlo
 solo al autorizar su ejecucion. No es necesario habilitar el endpoint HTTP.
 
 ```powershell
-$testCredential = Get-Credential -UserName 'ard_suite' -Message 'MariaDB: base ard_suite_test'
+$testCredential = $null
+$testStartInfo = $null
+$testProcess = $null
 try {
-    $env:ARD_TEST_DB_HOST = '127.0.0.1'
-    $env:ARD_TEST_DB_PORT = '3307'
-    $env:ARD_TEST_DB_NAME = 'ard_suite_test'
-    $env:ARD_TEST_DB_USER = $testCredential.UserName
-    $env:ARD_TEST_DB_PASSWORD = $testCredential.GetNetworkCredential().Password
-    $env:ARD_TEST_DB_RESET = '1'
-    .\.venv\Scripts\python.exe -B -m pytest -p no:cacheprovider backend/tests/test_sprint_9_5c_a_solicitud_correccion.py backend/tests/test_sprint_9_5c_b_resolucion_correccion.py -k mariadb -q -rs
+    $testCredential = Get-Credential -Message 'MariaDB: base exclusiva ard_suite_pytest'
+    if ($null -eq $testCredential) {
+        throw 'Solicitud de credenciales cancelada.'
+    }
+    $testStartInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $testStartInfo.FileName = (Resolve-Path -LiteralPath '.\.venv\Scripts\python.exe').Path
+    $testStartInfo.WorkingDirectory = (Get-Location).Path
+    $testStartInfo.Arguments = '-B -m pytest -p no:cacheprovider backend/tests/test_sprint_9_5c_a_solicitud_correccion.py backend/tests/test_sprint_9_5c_b_resolucion_correccion.py -k mariadb -q -rs'
+    $testStartInfo.UseShellExecute = $false
+    $testStartInfo.EnvironmentVariables['ARD_TEST_DB_HOST'] = '127.0.0.1'
+    $testStartInfo.EnvironmentVariables['ARD_TEST_DB_PORT'] = '3307'
+    $testStartInfo.EnvironmentVariables['ARD_TEST_DB_NAME'] = 'ard_suite_pytest'
+    $testStartInfo.EnvironmentVariables['ARD_TEST_DB_USER'] = $testCredential.UserName
+    $testStartInfo.EnvironmentVariables['ARD_TEST_DB_PASSWORD'] = $testCredential.GetNetworkCredential().Password
+    $testStartInfo.EnvironmentVariables['ARD_TEST_DB_RESET'] = '1'
+    $testProcess = New-Object System.Diagnostics.Process
+    $testProcess.StartInfo = $testStartInfo
+    if (-not $testProcess.Start()) {
+        throw 'No se pudo iniciar pytest.'
+    }
+    $testProcess.WaitForExit()
+    if ($testProcess.ExitCode -ne 0) {
+        throw 'pytest fallo. Revisar la salida y cualquier estructura residual antes de continuar.'
+    }
 } finally {
-    'ARD_TEST_DB_HOST', 'ARD_TEST_DB_PORT', 'ARD_TEST_DB_NAME', 'ARD_TEST_DB_USER', 'ARD_TEST_DB_PASSWORD', 'ARD_TEST_DB_RESET' | ForEach-Object {
-        Remove-Item -LiteralPath "Env:$_" -ErrorAction SilentlyContinue
+    if ($null -ne $testStartInfo) {
+        $testStartInfo.EnvironmentVariables.Remove('ARD_TEST_DB_PASSWORD')
+        $testStartInfo.EnvironmentVariables.Remove('ARD_TEST_DB_USER')
+    }
+    if ($null -ne $testProcess) {
+        $testProcess.Dispose()
     }
     $testCredential = $null
 }
@@ -304,6 +347,133 @@ comando Python con `--collect-only`. Las protecciones se verifican sin MariaDB:
 ```powershell
 .\.venv\Scripts\python.exe -B -m pytest -p no:cacheprovider backend/tests/test_mariadb_test_safety.py -q
 ```
+
+## Sprint 9.5C-C1 — Base de identidad y primer administrador
+
+Esta etapa implementa DEC-211, DEC-212 y DEC-213 como base interna: usuarios
+individuales, roles, hashes Argon2id y un comando local para la primera cuenta.
+No incorpora login/logout, tokens, cookies, pantallas, autenticacion global ni
+sincronizacion. Los endpoints comerciales y sus identificadores declarados
+siguen funcionando como antes. Crear una cuenta no autentica sus llamadas HTTP.
+El endpoint de resolucion de correcciones conserva su bloqueo de desarrollo;
+este sprint no activa su configuracion ni lo habilita para produccion.
+
+### Modelo y compatibilidad
+
+`Usuario` (`usuarios`) tiene ID local autoincremental, `global_id` UUID estable,
+`nombre_usuario` unico, `nombre_visible`, `password_hash`, `activo`, `rol`,
+`created_at`, `updated_at` y `version`. La version empieza en 1 y SQLAlchemy la
+incrementa y comprueba en actualizaciones ORM para detectar escrituras obsoletas.
+El UUID de una identidad persistida no se reasigna mediante el modelo.
+
+El acceso se normaliza con Unicode NFKC, espacios externos eliminados y
+`casefold`; luego se admiten 3-64 caracteres ASCII `[a-z0-9._-]`, empezando por
+letra o numero. Se evita asi depender de reglas distintas de acentos/case en
+las collations MariaDB y SQLite. El nombre visible admite Unicode y hasta 120
+caracteres. La normalizacion tambien se aplica en el modelo ORM.
+
+`inicializacion_identidad` es un marcador persistente con una unica fila (ID 1)
+y fecha de inicializacion. Se confirma junto con la primera identidad y se
+conserva aunque se desactive, cambie de rol o elimine una cuenta. No borrarlo
+para volver a instalar administradores: una recuperacion futura necesita un
+procedimiento administrativo separado y autorizado.
+
+La migracion aditiva `20261021_0012` desciende de `20261016_0011`, crea solo
+estas dos tablas y sus restricciones/indices. No modifica tablas comerciales,
+no agrega referencias a los IDs historicos y no inventa asociaciones. Un ID
+local nuevo puede coincidir numericamente con un ID historico declarado:
+eso no prueba que representen la misma persona. Una futura conciliacion debe
+ser explicita, sin reescribir el historial ni adjudicarle autenticacion pasada.
+El downgrade se rechaza si hay cuentas o marcador de inicializacion.
+
+### Roles y permisos internos
+
+El mapa inmutable de `backend/app/permissions/usuarios.py` define permisos por
+operacion, sin tablas de administracion dinamica ni jerarquia implicita:
+
+| Rol | Permiso inicial |
+| --- | --- |
+| `ADMINISTRADOR` | `usuarios.administrar` |
+| `SUPERVISOR` | `caja.correcciones.resolver` |
+| `CAJERO` | `caja.operar` |
+
+Administrar identidades no concede automaticamente facultades financieras.
+Una cuenta inactiva no tiene permisos. La comprobacion recibe una entidad del
+backend, no un diccionario de roles enviado por el cliente. Aun no existe una
+dependencia HTTP de usuario autenticado: esta politica NO protege por si sola
+los endpoints actuales. Integrarla con identidad confiable corresponde a otra
+etapa antes de habilitar supervision en produccion.
+
+`UsuarioService.crear_usuario()` es una primitiva interna para cuentas CAJERO o
+SUPERVISOR, sin endpoint publico. Rechaza crear ADMINISTRADOR por esa via.
+`crear_primer_administrador()` solo permite inicializar una base sin identidades
+ni marcador. Tampoco existe una via para agregar administradores posteriores.
+`verificar_credenciales()` devuelve una lectura sin secretos o `None`, sin
+crear sesiones de acceso y sin actualizar automaticamente hashes. No es un login.
+
+### Credenciales y comando de instalacion
+
+Dependencia directa nueva: `argon2-cffi==25.1.0` (con sus bindings CFFI).
+Los hashes son Argon2id con salt aleatoria, memoria 64 MiB, tiempo 3 y paralelismo
+4. Las contrasenas admiten 15-1024 caracteres, espacios y Unicode, y no pueden
+ser solo espacios. No se recortan ni normalizan. No hay contrasenas predeterminadas,
+requisitos arbitrarios de clases de caracteres ni almacenamiento reversible.
+El esquema de entrada oculta/excluye la contrasena de representaciones y dumps;
+las respuestas de usuario nunca incluyen el hash.
+
+Una vez revisada y aplicada por separado la migracion 0012, desde la raiz del
+repositorio, en una terminal **elevada como administrador de Windows** (o root
+en Unix), ejecutar manualmente:
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.app.cli.crear_primer_administrador
+```
+
+El comando usa la conexion configurada del backend; el operador debe comprobar
+la instancia objetivo y sus permisos antes de instalar. Solicita nombre de
+usuario, nombre visible y dos veces la contrasena mediante entrada oculta.
+No acepta argumentos de credenciales, variables de contrasena inicial ni
+archivos de contrasenas. Rechaza terminales no interactivas y el fallback de
+`getpass` a entrada visible. La salida no imprime usuario elegido, contrasena,
+hash, parametros SQL ni cadenas de conexion.
+
+La reserva del marcador y la cuenta se confirman en una unica transaccion;
+si falla, ambos se revierten. Dos instaladores compiten por la misma clave
+primaria: solo uno puede reservar la inicializacion. SQLite toma tambien
+`BEGIN IMMEDIATE`; MariaDB conserva su aislamiento y usa la unicidad del
+marcador. Cualquier identidad previa, incluso importada sin marcador, impide
+el primer administrador. Los errores tecnicos requieren verificar el resultado
+antes de reintentar si el fallo ocurrio durante la confirmacion.
+
+El limite de acceso del comando es el sistema operativo local y los permisos
+de base de datos; no crea un mecanismo de autenticacion web. Alguien que ya
+disponga de acceso administrativo directo a MariaDB puede alterar sus tablas.
+No usar este comando en las sucursales como sustituto de la provision central
+cuando se implemente esa arquitectura.
+
+### Preparacion central/local y limites pendientes
+
+El ID local sirve para relaciones dentro de una instancia; el UUID identifica
+la misma cuenta entre central y sucursales. La arquitectura objetivo conserva
+al central como autoridad para altas, cambios de rol, credenciales y bajas.
+La copia local debera aplicar cambios por UUID y version, incluyendo `activo=false`
+en lugar de eliminar historiales. Las fechas no sustituyen a la version.
+
+El contador ORM solo detecta concurrencia local: por si solo no resuelve
+escrituras divergentes entre instalaciones. Quedan pendientes el protocolo
+de distribucion, procedencia de cambios, conflictos de nombres, revocaciones,
+recuperacion de administracion y distribucion segura de credenciales. No se
+replican hashes, contrasenas ni sesiones en C1. Autenticar localmente sin
+Internet sera posible cuando se agreguen sesiones sobre la copia local; C1
+no promete operacion con el terminal desconectado del backend.
+
+Las pruebas de C1 usan SQLite en memoria/archivos temporales y simulan la CLI.
+La migracion se verifica exclusivamente sobre una base SQLite en memoria.
+No se ejecuta el comando de instalacion contra una base real. La concurrencia
+y aplicacion real de esta nueva migracion en MariaDB quedan pendientes de
+validacion autorizada. La fixture protegida de `ard_suite_pytest` valida
+integracion desde metadata; la validacion de migraciones usa `ard_suite_test`
+por separado y no utiliza esa fixture.
 
 ## Business Rules Architecture
 

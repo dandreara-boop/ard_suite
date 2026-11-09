@@ -1,3 +1,4 @@
+from backend.app.models.usuario import InicializacionIdentidad, RolUsuario, Usuario
 from backend.app.models.catalogo import (
     Articulo,
     ArticuloAtributo,
@@ -59,6 +60,9 @@ from backend.app.models.venta import (
 )
 
 __all__ = [
+    "InicializacionIdentidad",
+    "RolUsuario",
+    "Usuario",
     "Articulo",
     "ArticuloAtributo",
     "ArticuloProveedor",

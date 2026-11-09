@@ -10,9 +10,9 @@ from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
 
-TEST_DATABASE = "ard_suite_test"
+TEST_DATABASE = "ard_suite_pytest"
 IDENTITY_QUERY = "SELECT DATABASE(), @@port, VERSION()"
-SCHEMA_LOCK = "ard_suite_test_pytest_schema"
+SCHEMA_LOCK = "ard_suite_pytest_pytest_schema"
 ENV_KEYS = (
     "ARD_TEST_DB_HOST", "ARD_TEST_DB_PORT", "ARD_TEST_DB_NAME",
     "ARD_TEST_DB_USER", "ARD_TEST_DB_PASSWORD", "ARD_TEST_DB_RESET",
@@ -40,7 +40,7 @@ class MariaDBTestConfig:
         if not any(key in environ for key in ENV_KEYS):
             raise MariaDBTestsNotSelected("MariaDB no seleccionada: configurar ARD_TEST_DB_* explicitamente")
         if environ.get("ARD_TEST_DB_NAME") != TEST_DATABASE:
-            raise MariaDBTestSafetyError("ARD_TEST_DB_NAME debe seleccionar exclusivamente ard_suite_test")
+            raise MariaDBTestSafetyError("ARD_TEST_DB_NAME debe seleccionar exclusivamente ard_suite_pytest; ard_suite_dev y ard_suite_test estan prohibidas")
         if environ.get("ARD_TEST_DB_HOST") != "127.0.0.1" or environ.get("ARD_TEST_DB_PORT") != "3307":
             raise MariaDBTestSafetyError("Los tests requieren seleccion explicita de 127.0.0.1:3307")
         if not environ.get("ARD_TEST_DB_USER") or "ARD_TEST_DB_PASSWORD" not in environ:
@@ -105,13 +105,13 @@ def mariadb_test_sessions(
             _check_connection(owner)
             acquired = owner.exec_driver_sql(f"SELECT GET_LOCK('{SCHEMA_LOCK}', 0)").scalar()
             if acquired != 1:
-                raise MariaDBTestSafetyError("ard_suite_test esta ocupada por otra ejecucion de pruebas")
+                raise MariaDBTestSafetyError("ard_suite_pytest esta ocupada por otra ejecucion de pruebas")
             owns_schema = False
             try:
                 inspector = inspect(owner)
                 if inspector.get_table_names() or inspector.get_view_names():
                     raise MariaDBTestSafetyError(
-                        "ard_suite_test debe estar vacia; no se borran tablas o vistas preexistentes"
+                        "ard_suite_pytest debe estar vacia; no se borran tablas o vistas preexistentes"
                     )
                 _check_connection(owner)
                 owns_schema = True  # Also clean up a partially failed create_all.

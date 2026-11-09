@@ -10,7 +10,7 @@ from backend.tests import mariadb_test_support as support
 def explicit_test_env(**changes):
     return {
         "ARD_TEST_DB_HOST": "127.0.0.1", "ARD_TEST_DB_PORT": "3307",
-        "ARD_TEST_DB_NAME": "ard_suite_test", "ARD_TEST_DB_USER": "test_user",
+        "ARD_TEST_DB_NAME": "ard_suite_pytest", "ARD_TEST_DB_USER": "test_user",
         "ARD_TEST_DB_PASSWORD": "dummy-unit-test-value", "ARD_TEST_DB_RESET": "1",
         **changes,
     }
@@ -23,8 +23,8 @@ def forbid_real_connections(monkeypatch):
 
 
 @pytest.mark.parametrize("database", [
-    "ard_suite_dev", "production", "ard_suite_test_backup", "ard_suite_test_95ca_123",
-    "", "ARD_SUITE_TEST", " ard_suite_test", "ard_suite_test ",
+    "ard_suite_dev", "ard_suite_test", "production", "ard_suite_test_backup", "ard_suite_test_95ca_123",
+    "ard_suite_pytest_backup", "", "ARD_SUITE_PYTEST", " ard_suite_pytest", "ard_suite_pytest ",
 ])
 def test_rechaza_cualquier_base_distinta_a_la_seleccion_explicita(database):
     with pytest.raises(support.MariaDBTestSafetyError):
@@ -82,7 +82,7 @@ def test_url_propia_no_depende_de_app_y_no_expone_password():
     config = support.MariaDBTestConfig.from_environ(env)
     url = config.url()
     assert (url.host, url.port, url.database, url.drivername) == (
-        "127.0.0.1", 3307, "ard_suite_test", "mysql+pymysql",
+        "127.0.0.1", 3307, "ard_suite_pytest", "mysql+pymysql",
     )
     assert url.password == env["ARD_TEST_DB_PASSWORD"]
     assert env["ARD_TEST_DB_PASSWORD"] not in repr(config)
@@ -90,9 +90,9 @@ def test_url_propia_no_depende_de_app_y_no_expone_password():
 
 
 @pytest.mark.parametrize("identity", [
-    ("ard_suite_dev", 3307, "12.2.2-MariaDB"), (None, 3307, "12.2.2-MariaDB"),
-    ("other_test", 3307, "12.2.2-MariaDB"), ("ard_suite_test", 3306, "12.2.2-MariaDB"),
-    ("ard_suite_test", 3307, "8.0-MySQL"), None,
+    ("ard_suite_dev", 3307, "12.2.2-MariaDB"), ("ard_suite_test", 3307, "12.2.2-MariaDB"),
+    (None, 3307, "12.2.2-MariaDB"), ("other_test", 3307, "12.2.2-MariaDB"),
+    ("ard_suite_pytest", 3306, "12.2.2-MariaDB"), ("ard_suite_pytest", 3307, "8.0-MySQL"), None,
 ])
 def test_checkout_rechaza_conexion_real_distinta(identity):
     dbapi = Mock()
@@ -107,7 +107,7 @@ def fake_server(monkeypatch, *, tables=(), views=(), acquired=1):
     engine, owner, metadata = Mock(), Mock(), Mock(schema=None, tables={})
     engine.connect.return_value.__enter__ = Mock(return_value=owner)
     engine.connect.return_value.__exit__ = Mock(return_value=False)
-    identity = ["ard_suite_test", 3307, "12.2.2-MariaDB"]
+    identity = ["ard_suite_pytest", 3307, "12.2.2-MariaDB"]
     statements = []
     def execute(statement):
         statements.append(statement)
@@ -152,17 +152,18 @@ def test_preparacion_y_limpieza_solo_tablas_de_base_validada(monkeypatch):
     assert all("CREATE DATABASE" not in sql and "DROP DATABASE" not in sql for sql in statements)
     assert any("RELEASE_LOCK" in sql for sql in statements)
     url = constructor.call_args.args[0]
-    assert url.database == "ard_suite_test" and url.port == 3307
+    assert url.database == "ard_suite_pytest" and url.port == 3307
     assert constructor.call_args.kwargs["isolation_level"] == "REPEATABLE READ"
     listener.assert_called_once_with(engine, "checkout", support._check_checkout)
     engine.dispose.assert_called_once()
 
 
-def test_teardown_rechaza_base_cambiada_sin_ddl(monkeypatch):
+@pytest.mark.parametrize("database", ["ard_suite_dev", "ard_suite_test"])
+def test_teardown_rechaza_base_cambiada_sin_ddl(monkeypatch, database):
     engine, _, metadata, identity, _, _, _ = fake_server(monkeypatch)
     with pytest.raises(support.MariaDBTestSafetyError):
         with support.mariadb_test_sessions(explicit_test_env(), metadata):
-            identity[0] = "ard_suite_dev"
+            identity[0] = database
     metadata.create_all.assert_called_once()
     metadata.drop_all.assert_not_called()
     engine.dispose.assert_called_once()
