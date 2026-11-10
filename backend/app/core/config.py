@@ -9,6 +9,8 @@ class Settings(BaseSettings):
     app_name: str = Field(default="ARD Suite API", alias="APP_NAME")
     app_env: str = Field(default="development", alias="APP_ENV")
     app_debug: bool = Field(default=False, alias="APP_DEBUG")
+    auth_sucursal: str | None = Field(default=None, alias="AUTH_SUCURSAL", min_length=1, max_length=64)
+    auth_puesto: str | None = Field(default=None, alias="AUTH_PUESTO", min_length=1, max_length=64)
     caja_correcciones_resolucion_dev_enabled: bool = Field(
         default=False, alias="CAJA_CORRECCIONES_RESOLUCION_DEV_ENABLED"
     )

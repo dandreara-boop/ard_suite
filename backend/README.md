@@ -82,6 +82,14 @@ Respuesta esperada con MariaDB disponible:
 python -m pytest
 ```
 
+Para validacion local sin MariaDB, excluir los casos reales y ejecutar las
+protecciones simuladas por separado (sin configurar `ARD_TEST_DB_*`):
+
+```powershell
+.\.venv\Scripts\python.exe -B -m pytest -p no:cacheprovider backend/tests --ignore=backend/tests/test_sprint_9_5c_c2_mariadb.py -k 'not mariadb' -q
+.\.venv\Scripts\python.exe -B -m pytest -p no:cacheprovider backend/tests/test_mariadb_test_safety.py -q
+```
+
 ## Sprint 9.5C-A — Solicitud de correccion de arqueo
 
 `POST /api/cajas/arqueos/{arqueo_id}/solicitar-correccion` recibe `usuario_id`,
@@ -690,3 +698,270 @@ Filtros de stock: `variante_id`, `destino_id`, `estado`.
 Filtros de historial: `variante_id`, `destino_id`, `tipo`, `fecha_desde`, `fecha_hasta`.
 
 Existe `InventoryService.rebuild_stock_actual()` como funcion interna preparada para reconstruccion desde historial. No se expone como operacion normal ni se ejecuta automaticamente.
+
+## Sprint 9.5C-C2 — Autenticacion local y sesiones individuales
+
+C2 agrega un contrato backend de autenticacion sobre las identidades de C1.
+No instala autenticacion global ni modifica autorizaciones comerciales: C3
+protegera rutas y C4 reemplazara las autorizaciones provisionales de supervisores.
+No implementa sincronizacion, recuperacion offline central ni otros mecanismos C5.
+Las notas anteriores que describen la ausencia de login corresponden a C1.
+
+**DEC-214 no esta completamente operativa hasta integrar la aplicacion cliente.**
+El cliente debera solicitar usuario y contrasena en cada apertura, mantener los
+tokens y el localizador solo en memoria, serializar renovaciones y llamar a logout
+antes de cerrar normalmente. No persistir tokens en localStorage ni en archivos.
+Un cierre abrupto no puede notificarse de forma garantizada: las credenciales
+expiran y la sesion abandonada queda sujeta al plazo de recuperacion. Si las
+credenciales ya expiraron, el cierre remoto exige reautenticacion; descartar el
+estado local no equivale a confirmar un logout en el servidor.
+
+### Modelo y estados
+
+La migracion aditiva `20261110_0013` depende de `20261021_0012`. Crea solamente:
+
+- `sesiones_usuario`: identidad, version del usuario, contexto local, actividad,
+  bloqueo y finalizacion. Su UUID publico es un localizador sin privilegios.
+- `credenciales_sesion`: parejas de verificadores de acceso/renovacion, generaciones,
+  candidaturas, activacion, expiraciones e invalidacion. No almacena tokens recuperables.
+- `configuracion_seguridad`: sobrescrituras por parametro y ambito, con version,
+  claves no nulas y unicidad `(ambito, clave, parametro)`.
+- `limites_autenticacion`: reservas y contadores persistentes por cuenta/origen
+  y por origen, con generaciones para no descontar reservas de una ventana nueva.
+- `auditoria_autenticacion`: eventos estructurados y referencias internas a usuario
+  y sesion cuando corresponda, sin UUID publicos, nombres intentados, tokens,
+  verificadores, contrasenas, cuerpos HTTP ni mensajes de excepciones originales.
+
+Las nuevas tablas usan InnoDB. Sus fechas se escriben expresamente en UTC;
+`DATETIME(6)` preserva microsegundos en MariaDB y las respuestas incluyen UTC.
+No se depende de `NOW()` ni de la zona horaria de Windows o de la conexion.
+No se reinterpretan fechas historicas. El reloj local del servidor debe ser confiable.
+
+Los estados logicos son `ACTIVA`, `BLOQUEADA`, `CERRADA` y `REVOCADA`. La
+expiracion de tokens no cierra la sesion. La inactividad bloquea sin cerrar
+turnos de caja, cancelar ventas ni modificar operaciones pendientes.
+Una cuenta desactivada o con version distinta a la que inicio la sesion
+provoca su revocacion en la siguiente validacion; este comportamiento es
+conservador y tambien se aplica a cambios de rol/version de C1.
+
+Una sesion bloqueada puede desbloquearse tras mas de 30 minutos usando su
+localizador y la contrasena de su propietario, aun sin tokens vigentes. Se
+revalidan propietario, version, estado y contexto bajo bloqueo antes de emitir
+credenciales nuevas. Una sesion cerrada, revocada o abandonada fuera del plazo
+de recuperacion nunca se reabre. Si se perdio el localizador, corresponde login.
+El localizador por si solo no permite consultar, renovar, cerrar ni desbloquear.
+
+### Politica de seguridad
+
+La prioridad por parametro es puesto -> sucursal -> general -> valor inicial.
+GENERAL usa clave vacia; SUCURSAL/PUESTO requieren clave no vacia. Los parametros
+se validan al leerlos y una politica desconocida, fuera de rango o incoherente
+falla cerrada. No hay interfaz ni endpoint publico de administracion en C2.
+
+| Parametro | Inicial | Limites admitidos |
+| --- | --- | --- |
+| `inactividad` | 900 s | 60–7200 s |
+| `intentos_cuenta` | 5 | 3–10 |
+| `bloqueo_intentos` | 900 s | 60–3600 s |
+| `reinicio_fallos` | 1800 s sin fallos | 300–7200 s |
+| `intentos_origen` | 30 admisiones | 10–120 |
+| `ventana_origen` | 60 s | 30–900 s |
+| `acceso` | 300 s | 60–600 s |
+| `renovacion` | 1800 s | 900–14400 s |
+| `preparacion` | 60 s | 15–120 s |
+| `recuperacion` | 86400 s desde ultima actividad | 3600–2592000 s |
+
+Recuperacion debe superar inactividad; renovacion debe superar acceso y ser al
+menos igual a inactividad. **No hay vencimiento fijo desde la creacion de la
+sesion:** la actividad interactiva desplaza el horizonte de recuperacion, por
+lo que una jornada activa puede continuar. Consultar, preparar y confirmar
+renovaciones no actualiza actividad ni impide el bloqueo. El bloqueo se
+materializa y audita en la siguiente comprobacion; no hay un proceso de barrido.
+
+`AUTH_SUCURSAL` y `AUTH_PUESTO` son identificadores opcionales de instalacion
+controlados por el backend. No se obtiene contexto de JSON ni de cabeceras del
+cliente. El repositorio aun no tiene modelos de sucursal/puesto; no se equiparan
+con destinos de inventario o cajas. Varios puestos detras de un mismo backend
+necesitaran provision confiable antes de poder distinguirlos y autorizarlos.
+No se modifica `.env` para habilitar esta configuracion.
+
+Los intentos se reservan atomicamente antes de ejecutar Argon2. Un exito devuelve
+solo su reserva de cuenta/origen; los fallos conservan la reserva y actualizan
+la fecha del ultimo fallo. Una peticion interrumpida puede consumir cuota hasta
+su recuperacion temporal. Los intentos denegados no prolongan el bloqueo.
+La cuota por origen incluye las admisiones exitosas y los rechazos por cuota
+de cuenta, para
+limitar consumo de Argon2 y ataques entre nombres diferentes. Los limites no
+desactivan cuentas ni cierran sesiones en otros origenes. Una IP compartida
+puede afectar a varios clientes; el esquema no elimina ataques distribuidos.
+Se utiliza el peer HTTP directo y se ignora `X-Forwarded-For`: un proxy requiere
+un diseno posterior de origen confiable, no aceptar cabeceras arbitrarias.
+
+### Contrato HTTP
+
+| Metodo y ruta | Entrada y efecto |
+| --- | --- |
+| `POST /api/auth/login` | `nombre_usuario`, `password`; crea sesion y pareja activa |
+| `GET /api/auth/sesion` | `Authorization: Bearer <token_acceso>`; consulta sin registrar actividad |
+| `POST /api/auth/actividad` | Bearer de acceso; registra interaccion si aun esta activa |
+| `POST /api/auth/renovar` | `token_renovacion`; prepara pareja candidata |
+| `POST /api/auth/renovar/confirmar` | `rotacion_id`, `token_renovacion` candidato; confirma sin devolver tokens |
+| `POST /api/auth/desbloquear` | `sesion_id`, `nombre_usuario`, `password`; autentica al propietario sin token vigente |
+| `POST /api/auth/logout` | `token_renovacion` vigente; cierra solo esa sesion |
+
+Los localizadores se reciben en cuerpos JSON, nunca como parametros de URL.
+Login, preparacion y desbloqueo devuelven `sesion_id`, `rotacion_id`, ambos
+tokens y sus fechas. En preparacion las expiraciones de uso son nulas y se
+devuelve `confirmar_hasta`; los tokens pendientes no autentican solicitudes.
+Los tokens solo aparecen en respuestas exitosas que deben entregarlos al cliente.
+Usar TLS al transportar credenciales por una red, incluso en una LAN sin Internet.
+No configurar proxies o herramientas para registrar cuerpos o cabeceras de autenticacion.
+
+Los rechazos de credenciales usan 401 generico; los limites por origen usan 429
+sin revelar cuentas. Una credencial vigente de sesion bloqueada recibe 423
+en operaciones que requieren sesion activa. Entradas invalidas usan 422 sin
+reflejar valores; errores internos usan 503 sin SQL ni excepciones originales.
+Las respuestas llevan `Cache-Control: no-store`. C2 no crea cookies.
+
+El cliente debe llamar a actividad solo por interacciones reales. El servidor
+no puede distinguir una accion fisica de una llamada fabricada por un cliente
+que posee un bearer: este endpoint no demuestra presencia humana. Renovacion
+y consulta de sesion nunca llaman a actividad de manera implicita.
+
+### Renovacion, concurrencia y respuestas perdidas
+
+Cada token tiene 256 bits aleatorios; solo se persiste SHA-256 del token.
+Las contrasenas siguen usando exclusivamente Argon2id de C1.
+
+1. Preparar valida la renovacion actual sin extender ninguna expiracion anterior.
+   Guarda una candidata con plazo corto y sustituye cualquier pendiente previa.
+2. El cliente conserva la pareja candidata en memoria y confirma presentando
+   su token de renovacion. Se revalidan la generacion de origen, su expiracion,
+   el plazo de candidatura y la sesion bajo bloqueo.
+3. La confirmacion activa la candidata e invalida la pareja anterior y las
+   candidaturas pendientes en la misma transaccion. Las expiraciones nuevas
+   comienzan al activar; no existe gracia para credenciales invalidadas.
+4. Repetir la confirmacion solo reconoce esa misma generacion aun vigente.
+   Devuelve las mismas expiraciones, sin prolongarlas, emitir tokens ni duplicar
+   el evento de renovacion. Una generacion sustituida o finalizada se rechaza.
+
+Si se pierde la respuesta de preparacion, puede prepararse otra pareja usando
+la credencial anterior aun vigente. Si se pierde la respuesta de confirmacion,
+puede repetirse con la candidata ya recibida. Si se pierde todo el estado en
+memoria, se agotan los plazos o la sesion se bloquea, corresponde autenticar
+mediante contrasena. No se guardan secretos recuperables para reenviar respuestas.
+
+Las operaciones usan lecturas actuales con `FOR UPDATE` en MariaDB; SQLite usa
+`BEGIN IMMEDIATE` en las pruebas. La verificacion Argon2 ocurre fuera de bloqueos
+de filas y luego se comprueba nuevamente version/estado de identidad. El cierre,
+desbloqueo y revocacion coordinan sus cambios mediante la misma fila de sesion.
+Un cierre confirmado invalida todas sus credenciales y no puede ser revertido
+por una confirmacion posterior. Los conflictos transitorios anteriores al commit
+se recuperan por etapa con rollback completo y hasta tres intentos totales,
+segun se detalla mas abajo. Nunca se repite una etapa despues de intentar commit
+con resultado potencialmente desconocido.
+
+`AutenticacionService.revocar()` es un puerto interno para llamadas confiables;
+no hay un endpoint publico para revocar otra sesion ni sincronizacion C5.
+Las referencias de auditoria son IDs internos, no los localizadores que usa el
+cliente. No hay purga automatica de auditorias o credenciales historicas en C2;
+se requiere planificar retencion/capacidad y una politica administrativa posterior.
+
+### Validacion posterior autorizada
+
+Las pruebas locales estan en `test_sprint_9_5c_c2_autenticacion.py`. Incluyen una
+migracion aplicada solamente en SQLite nueva en memoria, paridad con metadata,
+proteccion de tablas anteriores, expiraciones, cuotas, auditoria, errores HTTP
+y carreras de rotacion/cierre/desbloqueo. La compilacion del DDL MariaDB se
+verifica sin conectarse. SQLite no certifica los bloqueos reales de MariaDB.
+
+Antes de validar la migracion real, obtener autorizacion expresa y respaldo
+verificado. Mantener `ard_suite_dev` intacta; no aplicar migraciones a
+`ard_suite_pytest`. Para una validacion autorizada en `ard_suite_test`:
+
+1. Inspeccionar la revision 0012 y la ausencia de las cinco tablas nuevas mediante
+   consultas de solo lectura; verificar host, puerto y `DATABASE()` efectivos.
+2. Preparar un proceso hijo con `DB_HOST=127.0.0.1`, `DB_PORT=3307` y
+   `DB_NAME=ard_suite_test`, credenciales solicitadas de forma segura y sin tocar
+   `.env`. Revisar `env.py` y confirmar que usa esa misma configuracion.
+3. Cerrar la conexion de prevalidacion y aplicar exclusivamente `20261110_0013`,
+   nunca `head` ni un comando sin destino explicito.
+4. En otra conexion verificar revision, tablas vacias, columnas, claves,
+   indices, CHECK e InnoDB. Mostrar definiciones reales de CHECK para revision.
+   No crear administradores ni ejecutar pruebas destructivas en esta base.
+
+MariaDB puede confirmar DDL parcialmente. Ante errores detenerse e inspeccionar;
+no asumir rollback completo, reintentar, ejecutar stamp o downgrade automaticamente.
+El downgrade de 0013 comprueba todas sus tablas antes de cualquier DDL y rechaza
+perdida de configuracion, sesiones, limites o auditoria.
+
+Las ocho pruebas reales de C2 estan en `test_sprint_9_5c_c2_mariadb.py` y quedan
+pendientes de autorizacion. Usan sin modificaciones `mariadb_test_sessions()`:
+opt-in completo `ARD_TEST_DB_*`, base `ard_suite_pytest` vacia, identidad real,
+lock exclusivo, rechazo de tablas/vistas previas y limpieza solo de metadata
+propia. No crean bases ni usuarios ni ejecutan Alembic. Para ejecutarlas despues
+de autorizarlas, usar el procedimiento PowerShell de proceso hijo documentado
+mas arriba, cambiando unicamente sus argumentos pytest por:
+
+```text
+-B -m pytest -p no:cacheprovider backend/tests/test_sprint_9_5c_c2_mariadb.py -q -rs
+```
+
+Una interrupcion puede dejar tablas residuales; la fixture las rechazara en la
+siguiente ejecucion. Inspeccionarlas manualmente, sin borrado indiscriminado ni
+reintentos automaticos. No seleccionar `ard_suite_test` para estas pruebas.
+
+### C2: conflictos de snapshot y repeticion controlada de MariaDB
+
+El error 1020 (`ER_CHECKREAD`) no identifica un deadlock: bajo `REPEATABLE READ`
+con `innodb_snapshot_isolation=ON`, MariaDB puede rechazar un bloqueo o una
+escritura sobre filas que cambiaron respecto de la vista de lectura. Ver la
+[documentacion de MariaDB](https://mariadb.com/docs/server/server-usage/storage-engines/innodb/innodb-system-variables#innodb_snapshot_isolation).
+Una busqueda previa por token/localizador puede crear esa vista antes de esperar
+`FOR UPDATE`. `populate_existing` refresca el objeto ORM, no la vista del servidor.
+Asimismo, el `SELECT` de politica anterior a los upserts podia dejar fuera de
+la vista las cuotas insertadas/modificadas por otros trabajadores: un
+`INSERT ... ON DUPLICATE KEY UPDATE`, incluso sin cambiar la clave, no es una
+lectura inocua ni restablece el snapshot. La politica ahora se lee despues de
+los upserts y bloqueos de cuotas, manteniendo su orden por clave.
+
+Se conservan aislamiento, bloqueos, revalidaciones y esquema. No se cambia
+`innodb_snapshot_isolation`. Cada etapa admite como maximo tres intentos totales
+solo para `OperationalError` MySQL/MariaDB con codigo entero 1020, 1205 o 1213 y
+conexion no invalidada. El rollback de la transaccion raiz es obligatorio antes
+de volver a descubrir filas, bloquearlas y comprobar estado, generacion y plazos.
+No hay reintento de un SELECT aislado ni uso de savepoints para reutilizar una
+vista antigua. Agotar los intentos sigue siendo error tecnico, no exito ni 401.
+
+La admision de cuota, Argon2 y finalizacion del login/desbloqueo son etapas
+separadas. Repetir la finalizacion no vuelve a reservar cuota ni a ejecutar Argon2;
+se conserva la reserva y se comprueba otra vez la identidad/version bajo bloqueo.
+Las reservas, auditorias y credenciales de un intento abortado se revierten juntas.
+La finalizacion de una cuenta conocida bloquea primero el usuario incluso cuando
+la contrasena falla: la FK de auditoria no debe adquirir implicitamente ese
+bloqueo despues de bloquear la cuota, invirtiendo el orden de una autenticacion
+exitosa. Las busquedas y bloqueos de sesion/credenciales mantienen el orden existente.
+Las denegaciones esperadas siguen confirmando su auditoria/contadores una sola vez.
+El servicio ejecuta `flush()` explicitamente antes de entrar en el commit para
+recuperar conflictos de escrituras diferidas. Cualquier error despues de intentar
+commit, incluso 1020, se propaga sin repetir la etapa: su resultado puede ser incierto.
+
+`test_auth_transaction_retry.py` reproduce los escenarios con SQLite y errores
+del driver inyectados, incluyendo SQL durante flush, resultado competidor,
+expiracion y desactivacion durante el reintento. No certifica MariaDB real.
+Los ocho casos reales conservan la fixture protegida y comprueban tambien las
+credenciales invalidadas, la no reactivacion tras revocacion/cierre y las cuotas.
+
+Para repetirlos tras autorizacion expresa, comprobar que `ard_suite_pytest`
+este vacia. Usar el bloque PowerShell de proceso hijo de esta documentacion con
+los seis `ARD_TEST_DB_*` explicitos y estos argumentos exactos, sin paralelismo
+de pytest ni repeticion automatica de la suite:
+
+```text
+-B -m pytest -p no:cacheprovider backend/tests/test_sprint_9_5c_c2_mariadb.py -q -ra
+```
+
+`-p no:cacheprovider` evita los `PytestCacheWarning` de permisos en `.pytest_cache`;
+esos warnings no son errores de concurrencia. No borrar caches ni estructuras
+residuales automaticamente para intentar que las pruebas pasen. Este procedimiento
+no modifica `.env`, no aplica Alembic y no crea bases ni usuarios.

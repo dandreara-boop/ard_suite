@@ -60,7 +60,9 @@ def test_creacion_identidad_secreta_y_sin_vinculos_historicos(db_session):
     db_session.expire_all()
     assert snapshot(old_session) == before
     assert not Usuario.__table__.foreign_keys
-    assert not any(fk.target_fullname.startswith("usuarios.") for table in Base.metadata.tables.values() if table.name != "usuarios" for fk in table.foreign_keys)
+    # C2 adds identity-only references; historical commercial IDs remain unrelated.
+    identity_tables = {"usuarios", "sesiones_usuario", "auditoria_autenticacion"}
+    assert not any(fk.target_fullname.startswith("usuarios.") for table in Base.metadata.tables.values() if table.name not in identity_tables for fk in table.foreign_keys)
 
 
 @pytest.mark.parametrize("raw,expected", [("  CAJERO.UNO ", "cajero.uno"), ("ＡＤＭＩＮ_１", "admin_1"), ("Caja-01", "caja-01")])

@@ -1,4 +1,8 @@
 from backend.app.models.usuario import InicializacionIdentidad, RolUsuario, Usuario
+from backend.app.models.autenticacion import (
+    AuditoriaAutenticacion, ConfiguracionSeguridad, CredencialSesion,
+    LimiteAutenticacion, SesionUsuario,
+)
 from backend.app.models.catalogo import (
     Articulo,
     ArticuloAtributo,
@@ -60,6 +64,11 @@ from backend.app.models.venta import (
 )
 
 __all__ = [
+    "AuditoriaAutenticacion",
+    "ConfiguracionSeguridad",
+    "CredencialSesion",
+    "LimiteAutenticacion",
+    "SesionUsuario",
     "InicializacionIdentidad",
     "RolUsuario",
     "Usuario",
